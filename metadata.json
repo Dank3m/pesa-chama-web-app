@@ -1,0 +1,5 @@
+{
+  "name": "Pesa Chama Manager",
+  "description": "A comprehensive financial management dashboard for Chama groups, featuring loan calculation, disbursements, transaction tracking, and member management.",
+  "requestFramePermissions": []
+}

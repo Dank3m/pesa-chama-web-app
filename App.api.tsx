@@ -25,8 +25,14 @@ import Auth from './pages/Auth';
 import Expenses from './pages/Expenses';
 import Members from './pages/Members';
 import Disbursements from './pages/Disbursements';
+import ExternalLoans from './pages/ExternalLoans';
 import Register from './pages/Register';
+import PublicRegister from './pages/PublicRegister';
+import GroupSettings from './pages/GroupSettings';
+import Landing from './pages/Landing';
+import Billing from './pages/Billing';
 import Unauthorized from './components/Unauthorized';
+import GroupSelector from './components/GroupSelector';
 
 // Helper function to check if user has required role
 const hasRole = (userRole: string | undefined, allowedRoles: string[]): boolean => {
@@ -36,9 +42,22 @@ const hasRole = (userRole: string | undefined, allowedRoles: string[]): boolean 
 
 // Inner app component that uses auth context
 const AppContent: React.FC = () => {
-  const { user, isAuthenticated, isLoading, logout } = useAuth();
+  const {
+    user,
+    isAuthenticated,
+    isLoading,
+    logout,
+    // Multi-group support
+    availableGroups,
+    hasMultipleGroups,
+    showGroupSelector,
+    selectGroup,
+    switchGroup,
+    dismissGroupSelector,
+  } = useAuth();
   const [activePage, setActivePage] = useState('dashboard');
-  
+  const [showLanding, setShowLanding] = useState(false);
+
   // Theme State
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -51,6 +70,14 @@ const AppContent: React.FC = () => {
     return false;
   });
 
+  // Check if user is new (hasn't visited before)
+  useEffect(() => {
+    const hasVisited = localStorage.getItem('pesa_chama_visited');
+    if (!hasVisited && !isAuthenticated) {
+      setShowLanding(true);
+    }
+  }, [isAuthenticated]);
+
   // Apply theme class to html element
   useEffect(() => {
     if (darkMode) {
@@ -61,6 +88,18 @@ const AppContent: React.FC = () => {
       localStorage.setItem('theme', 'light');
     }
   }, [darkMode]);
+
+  // Handle Get Started from Landing page
+  const handleGetStarted = () => {
+    localStorage.setItem('pesa_chama_visited', 'true');
+    window.location.href = '/register/public';
+  };
+
+  // Handle Login from Landing page
+  const handleLoginClick = () => {
+    localStorage.setItem('pesa_chama_visited', 'true');
+    setShowLanding(false);
+  };
 
   // Show loading spinner during initial auth check
   if (isLoading) {
@@ -74,19 +113,54 @@ const AppContent: React.FC = () => {
     );
   }
 
+  // Show Landing page for new visitors
+  if (!isAuthenticated && showLanding) {
+    return (
+      <Landing
+        onGetStarted={handleGetStarted}
+        onLogin={handleLoginClick}
+        isDark={darkMode}
+        toggleTheme={() => setDarkMode(!darkMode)}
+      />
+    );
+  }
+
+  // Show group selector modal if needed
+  if (showGroupSelector && availableGroups.length > 0) {
+    return (
+      <div className={darkMode ? 'dark' : ''}>
+        <div className="min-h-screen bg-bgLight dark:bg-gray-900">
+          <GroupSelector
+            groups={availableGroups}
+            onSelect={selectGroup}
+            onDismiss={dismissGroupSelector}
+            isLoading={isLoading}
+          />
+        </div>
+      </div>
+    );
+  }
+
   // Show auth page if not authenticated
   if (!isAuthenticated) {
-    return <Auth onLogin={() => {}} />;
+    return <Auth />;
   }
 
   // Define pages that require admin/treasurer role
   const adminTreasurerPages = ['members', 'disbursements'];
+  const adminOnlyPages = ['group-settings'];
   const isAdminOrTreasurer = hasRole(user?.role, ['ADMIN', 'TREASURER']);
+  const isAdmin = hasRole(user?.role, ['ADMIN', 'SUPER_ADMIN']);
 
   // Redirect to dashboard if trying to access restricted page without permission
   const handleNavigate = (page: string) => {
     if (adminTreasurerPages.includes(page) && !isAdminOrTreasurer) {
       // Redirect to dashboard if not authorized
+      setActivePage('dashboard');
+      return;
+    }
+    if (adminOnlyPages.includes(page) && !isAdmin) {
+      // Redirect to dashboard if not admin
       setActivePage('dashboard');
       return;
     }
@@ -117,10 +191,21 @@ const AppContent: React.FC = () => {
           return <Unauthorized onNavigate={() => setActivePage('dashboard')} />;
         }
         return <Disbursements />;
+      case 'external-loans':
+        // All users can access (shows different data based on role)
+        return <ExternalLoans />;
+      case 'group-settings':
+        // Guard: only admin can access
+        if (!isAdmin) {
+          return <Unauthorized onNavigate={() => setActivePage('dashboard')} />;
+        }
+        return <GroupSettings />;
       case 'settings':
         return <Settings />;
       case 'notifications':
         return <Notifications />;
+      case 'billing':
+        return <Billing />;
       default:
         return <Dashboard isDark={darkMode} />;
     }
@@ -134,6 +219,10 @@ const AppContent: React.FC = () => {
       isDark={darkMode}
       toggleTheme={() => setDarkMode(!darkMode)}
       user={user}
+      availableGroups={availableGroups}
+      hasMultipleGroups={hasMultipleGroups}
+      selectedGroupId={user?.member?.groupId}
+      onSwitchGroup={switchGroup}
     >
       {renderPage()}
     </Layout>
@@ -143,18 +232,25 @@ const AppContent: React.FC = () => {
 // Main App with providers
 const App: React.FC = () => {
   const [isRegistrationRoute, setIsRegistrationRoute] = useState(false);
+  const [registrationRouteType, setRegistrationRouteType] = useState<'member' | 'public' | null>(null);
 
   // Check for registration route on mount
   useEffect(() => {
     const checkRoute = () => {
       const path = window.location.pathname;
       const params = new URLSearchParams(window.location.search);
-      
-      // Check if this is a registration link
+
+      // Check if this is a member registration link (with token)
       if (path === '/register' && params.get('memberId') && params.get('token')) {
         setIsRegistrationRoute(true);
+        setRegistrationRouteType('member');
+      // Check if this is a public registration page (create new group)
+      } else if (path === '/register/public' || path === '/signup') {
+        setIsRegistrationRoute(true);
+        setRegistrationRouteType('public');
       } else {
         setIsRegistrationRoute(false);
+        setRegistrationRouteType(null);
       }
     };
 
@@ -165,8 +261,11 @@ const App: React.FC = () => {
     return () => window.removeEventListener('popstate', checkRoute);
   }, []);
 
-  // Show Register page for registration links (no auth required)
+  // Show registration pages (no auth required)
   if (isRegistrationRoute) {
+    if (registrationRouteType === 'public') {
+      return <PublicRegister />;
+    }
     return <Register />;
   }
 

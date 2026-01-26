@@ -10,6 +10,7 @@ import Auth from './pages/Auth';
 import Expenses from './pages/Expenses';
 import Members from './pages/Members';
 import Disbursements from './pages/Disbursements';
+import ExternalLoans from './pages/ExternalLoans';
 
 const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -59,6 +60,8 @@ const App: React.FC = () => {
         return <Members />;
       case 'disbursements':
         return <Disbursements />;
+      case 'external-loans':
+        return <ExternalLoans />;
       case 'settings':
         return <Settings />;
       case 'notifications':

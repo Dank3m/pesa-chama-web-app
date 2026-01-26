@@ -7,12 +7,14 @@ export { default as api, TokenService } from './api';
 export type { ApiResponse, PagedResponse, ApiError } from './api';
 
 export { default as authService } from './authService';
-export type { 
-  LoginRequest, 
-  RegisterRequest, 
-  AuthResponse, 
-  UserResponse, 
-  ChangePasswordRequest 
+export type {
+  LoginRequest,
+  RegisterRequest,
+  AuthResponse,
+  UserResponse,
+  ChangePasswordRequest,
+  GroupMembershipResponse,
+  Member
 } from './authService';
 
 export { default as memberService } from './memberService';
@@ -80,3 +82,18 @@ export type {
   ChangePasswordRequest as SettingsChangePasswordRequest,
   Toggle2FARequest
 } from './settingsService';
+
+export { default as groupSettingsService } from './groupSettingsService';
+export {
+  MONTH_NAMES,
+  INTEREST_METHODS,
+  INTEREST_RATE_PERIODS,
+  CONTRIBUTION_CHECK_SCHEDULES,
+  INTEREST_ACCRUAL_SCHEDULES,
+  OVERDUE_CHECK_SCHEDULES
+} from './groupSettingsService';
+export type {
+  GroupSettingsResponse,
+  UpdateGroupSettingsRequest,
+  ScheduleOption
+} from './groupSettingsService';

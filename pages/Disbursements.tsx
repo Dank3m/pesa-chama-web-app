@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   CheckCircle, XCircle, DollarSign, Clock, Wallet,
-  CreditCard, Loader2, AlertCircle, X
+  CreditCard, Loader2, AlertCircle, X, Ban, History
 } from 'lucide-react';
 import StatCard from '../components/StatCard';
 import { useAuth } from '../contexts/AuthContext';
@@ -26,6 +26,7 @@ interface Loan {
   totalAmountPaid: number;
   outstandingBalance: number;
   status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'DISBURSED' | 'ACTIVE' | 'PAID_OFF' | 'DEFAULTED' | 'WRITTEN_OFF';
+  rejectionReason?: string;
   daysActive: number;
   createdAt: string;
 }
@@ -37,19 +38,24 @@ interface DisbursementStats {
   approvedAmount: number;
   totalDisbursed: number;
   activeLoansCount: number;
+  rejectedCount?: number;
+  rejectedAmount?: number;
+  disbursedCount?: number;
 }
+
+type TabType = 'action-required' | 'disbursed' | 'rejected';
 
 // --- Status Badge Component ---
 const StatusBadge: React.FC<{ status: Loan['status'] }> = ({ status }) => {
   const config: Record<string, { bg: string; text: string }> = {
-    PENDING: { bg: 'bg-yellow-100', text: 'text-yellow-700' },
-    APPROVED: { bg: 'bg-green-100', text: 'text-green-700' },
-    REJECTED: { bg: 'bg-red-100', text: 'text-red-700' },
-    DISBURSED: { bg: 'bg-blue-100', text: 'text-blue-700' },
-    ACTIVE: { bg: 'bg-blue-100', text: 'text-blue-700' },
-    PAID_OFF: { bg: 'bg-gray-100', text: 'text-gray-700' },
-    DEFAULTED: { bg: 'bg-red-100', text: 'text-red-700' },
-    WRITTEN_OFF: { bg: 'bg-gray-100', text: 'text-gray-500' },
+    PENDING: { bg: 'bg-yellow-100 dark:bg-yellow-900/30', text: 'text-yellow-700 dark:text-yellow-400' },
+    APPROVED: { bg: 'bg-green-100 dark:bg-green-900/30', text: 'text-green-700 dark:text-green-400' },
+    REJECTED: { bg: 'bg-red-100 dark:bg-red-900/30', text: 'text-red-700 dark:text-red-400' },
+    DISBURSED: { bg: 'bg-blue-100 dark:bg-blue-900/30', text: 'text-blue-700 dark:text-blue-400' },
+    ACTIVE: { bg: 'bg-blue-100 dark:bg-blue-900/30', text: 'text-blue-700 dark:text-blue-400' },
+    PAID_OFF: { bg: 'bg-gray-100 dark:bg-gray-700', text: 'text-gray-700 dark:text-gray-300' },
+    DEFAULTED: { bg: 'bg-red-100 dark:bg-red-900/30', text: 'text-red-700 dark:text-red-400' },
+    WRITTEN_OFF: { bg: 'bg-gray-100 dark:bg-gray-700', text: 'text-gray-500 dark:text-gray-400' },
   };
 
   const { bg, text } = config[status] || config.PENDING;
@@ -64,13 +70,13 @@ const StatusBadge: React.FC<{ status: Loan['status'] }> = ({ status }) => {
 // --- Loan Type Badge Component ---
 const LoanTypeBadge: React.FC<{ type: string }> = ({ type }) => {
   const config: Record<string, { bg: string; text: string }> = {
-    REGULAR: { bg: 'bg-blue-100', text: 'text-blue-600' },
-    EMERGENCY: { bg: 'bg-red-100', text: 'text-red-600' },
-    CONTRIBUTION_DEFAULT: { bg: 'bg-orange-100', text: 'text-orange-600' },
-    GUARANTEED: { bg: 'bg-purple-100', text: 'text-purple-600' },
+    REGULAR: { bg: 'bg-blue-100 dark:bg-blue-900/30', text: 'text-blue-600 dark:text-blue-400' },
+    EMERGENCY: { bg: 'bg-red-100 dark:bg-red-900/30', text: 'text-red-600 dark:text-red-400' },
+    CONTRIBUTION_DEFAULT: { bg: 'bg-orange-100 dark:bg-orange-900/30', text: 'text-orange-600 dark:text-orange-400' },
+    GUARANTEED: { bg: 'bg-purple-100 dark:bg-purple-900/30', text: 'text-purple-600 dark:text-purple-400' },
   };
 
-  const { bg, text } = config[type] || { bg: 'bg-gray-100', text: 'text-gray-600' };
+  const { bg, text } = config[type] || { bg: 'bg-gray-100 dark:bg-gray-700', text: 'text-gray-600 dark:text-gray-400' };
   const label = type.replace('_', ' ');
 
   return (
@@ -195,8 +201,14 @@ const Disbursements: React.FC = () => {
   const { user } = useAuth();
   const { currentGroup, formatCurrency, formatDate } = useAppData();
 
-  // State
-  const [loans, setLoans] = useState<Loan[]>([]);
+  // Tab state
+  const [activeTab, setActiveTab] = useState<TabType>('action-required');
+
+  // State for each tab's loans
+  const [actionRequiredLoans, setActionRequiredLoans] = useState<Loan[]>([]);
+  const [disbursedLoans, setDisbursedLoans] = useState<Loan[]>([]);
+  const [rejectedLoans, setRejectedLoans] = useState<Loan[]>([]);
+
   const [stats, setStats] = useState<DisbursementStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isStatsLoading, setIsStatsLoading] = useState(true);
@@ -209,23 +221,64 @@ const Disbursements: React.FC = () => {
     loan: Loan | null;
   }>({ isOpen: false, loan: null });
 
-  // Fetch pending and approved loans
-  const fetchLoans = useCallback(async () => {
+  // Fetch pending and approved loans (action required)
+  const fetchActionRequiredLoans = useCallback(async () => {
     if (!currentGroup?.id) return;
 
+    try {
+      const response = await api.get<Loan[]>(`/loans/group/${currentGroup.id}/pending-approved`);
+      setActionRequiredLoans(response.data || []);
+    } catch (err: any) {
+      console.error('Error fetching action required loans:', err);
+    }
+  }, [currentGroup?.id]);
+
+  // Fetch disbursed loans
+  const fetchDisbursedLoans = useCallback(async () => {
+    if (!currentGroup?.id) return;
+
+    try {
+      const response = await api.get<{ content: Loan[] }>(`/loans/group/${currentGroup.id}?status=DISBURSED&size=100`);
+      setDisbursedLoans(response.data?.content || []);
+    } catch (err: any) {
+      console.error('Error fetching disbursed loans:', err);
+    }
+  }, [currentGroup?.id]);
+
+  // Fetch rejected loans
+  const fetchRejectedLoans = useCallback(async () => {
+    if (!currentGroup?.id) return;
+
+    try {
+      const response = await api.get<{ content: Loan[] }>(`/loans/group/${currentGroup.id}?status=REJECTED&size=100`);
+      setRejectedLoans(response.data?.content || []);
+    } catch (err: any) {
+      console.error('Error fetching rejected loans:', err);
+    }
+  }, [currentGroup?.id]);
+
+  // Fetch all loans based on active tab
+  const fetchLoans = useCallback(async () => {
     setIsLoading(true);
     setError(null);
 
     try {
-      const response = await api.get<Loan[]>(`/loans/group/${currentGroup.id}/pending-approved`);
-      setLoans(response.data || []);
+      // Always fetch action required for stats
+      await fetchActionRequiredLoans();
+
+      // Fetch based on active tab
+      if (activeTab === 'disbursed') {
+        await fetchDisbursedLoans();
+      } else if (activeTab === 'rejected') {
+        await fetchRejectedLoans();
+      }
     } catch (err: any) {
       console.error('Error fetching loans:', err);
       setError(err.message || 'Failed to fetch loans');
     } finally {
       setIsLoading(false);
     }
-  }, [currentGroup?.id]);
+  }, [activeTab, fetchActionRequiredLoans, fetchDisbursedLoans, fetchRejectedLoans]);
 
   // Fetch disbursement stats
   const fetchStats = useCallback(async () => {
@@ -249,12 +302,21 @@ const Disbursements: React.FC = () => {
     fetchStats();
   }, [fetchLoans, fetchStats]);
 
+  // Fetch tab-specific data when tab changes
+  useEffect(() => {
+    if (activeTab === 'disbursed' && disbursedLoans.length === 0) {
+      fetchDisbursedLoans();
+    } else if (activeTab === 'rejected' && rejectedLoans.length === 0) {
+      fetchRejectedLoans();
+    }
+  }, [activeTab, disbursedLoans.length, rejectedLoans.length, fetchDisbursedLoans, fetchRejectedLoans]);
+
   // Approve loan handler
   const handleApprove = async (loanId: string) => {
     setActionLoading(loanId);
     try {
       await api.post(`/loans/${loanId}/approve`);
-      await Promise.all([fetchLoans(), fetchStats()]);
+      await Promise.all([fetchActionRequiredLoans(), fetchStats()]);
     } catch (err: any) {
       console.error('Error approving loan:', err);
       setError(err.message || 'Failed to approve loan');
@@ -271,7 +333,7 @@ const Disbursements: React.FC = () => {
     setActionLoading(loanId);
     try {
       await api.post(`/loans/${loanId}/reject`, { reason });
-      await Promise.all([fetchLoans(), fetchStats()]);
+      await Promise.all([fetchActionRequiredLoans(), fetchRejectedLoans(), fetchStats()]);
     } catch (err: any) {
       console.error('Error rejecting loan:', err);
       throw err;
@@ -285,12 +347,24 @@ const Disbursements: React.FC = () => {
     setActionLoading(loanId);
     try {
       await api.post(`/loans/${loanId}/disburse`);
-      await Promise.all([fetchLoans(), fetchStats()]);
+      await Promise.all([fetchActionRequiredLoans(), fetchDisbursedLoans(), fetchStats()]);
     } catch (err: any) {
       console.error('Error disbursing loan:', err);
       setError(err.message || 'Failed to disburse loan');
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  // Get current loans based on active tab
+  const getCurrentLoans = (): Loan[] => {
+    switch (activeTab) {
+      case 'disbursed':
+        return disbursedLoans;
+      case 'rejected':
+        return rejectedLoans;
+      default:
+        return actionRequiredLoans;
     }
   };
 
@@ -309,6 +383,8 @@ const Disbursements: React.FC = () => {
       </div>
     );
   }
+
+  const currentLoans = getCurrentLoans();
 
   return (
     <div className="space-y-6">
@@ -345,13 +421,74 @@ const Disbursements: React.FC = () => {
             Loan Disbursements & Approvals
           </h3>
           <p className="text-subtext dark:text-gray-400">
-            Manage member loan applications. Approve pending requests and disburse funds to approved loans.
+            Manage member loan applications. Approve pending requests, disburse funds, and view loan history.
             {currentGroup && (
               <span className="block mt-1 text-xs text-primary font-medium">
                 Viewing requests for {currentGroup.name}
               </span>
             )}
           </p>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-2 mb-6 border-b border-gray-200 dark:border-gray-700 overflow-x-auto">
+          <button
+            onClick={() => setActiveTab('action-required')}
+            className={`flex items-center gap-2 px-4 py-3 font-medium text-sm whitespace-nowrap transition-colors relative ${
+              activeTab === 'action-required'
+                ? 'text-primary'
+                : 'text-subtext dark:text-gray-400 hover:text-dark dark:hover:text-white'
+            }`}
+          >
+            <Clock size={16} />
+            Action Required
+            {actionRequiredLoans.length > 0 && (
+              <span className="px-2 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400">
+                {actionRequiredLoans.length}
+              </span>
+            )}
+            {activeTab === 'action-required' && (
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary"></div>
+            )}
+          </button>
+          <button
+            onClick={() => setActiveTab('disbursed')}
+            className={`flex items-center gap-2 px-4 py-3 font-medium text-sm whitespace-nowrap transition-colors relative ${
+              activeTab === 'disbursed'
+                ? 'text-primary'
+                : 'text-subtext dark:text-gray-400 hover:text-dark dark:hover:text-white'
+            }`}
+          >
+            <DollarSign size={16} />
+            Disbursed
+            {disbursedLoans.length > 0 && (
+              <span className="px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                {disbursedLoans.length}
+              </span>
+            )}
+            {activeTab === 'disbursed' && (
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary"></div>
+            )}
+          </button>
+          <button
+            onClick={() => setActiveTab('rejected')}
+            className={`flex items-center gap-2 px-4 py-3 font-medium text-sm whitespace-nowrap transition-colors relative ${
+              activeTab === 'rejected'
+                ? 'text-primary'
+                : 'text-subtext dark:text-gray-400 hover:text-dark dark:hover:text-white'
+            }`}
+          >
+            <Ban size={16} />
+            Rejected
+            {rejectedLoans.length > 0 && (
+              <span className="px-2 py-0.5 text-xs rounded-full bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                {rejectedLoans.length}
+              </span>
+            )}
+            {activeTab === 'rejected' && (
+              <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary"></div>
+            )}
+          </button>
         </div>
 
         {/* Error Display */}
@@ -382,13 +519,23 @@ const Disbursements: React.FC = () => {
                   <th className="p-4 whitespace-nowrap">Loan #</th>
                   <th className="p-4 whitespace-nowrap">Amount</th>
                   <th className="p-4 whitespace-nowrap">Type</th>
-                  <th className="p-4 whitespace-nowrap">Date Applied</th>
+                  <th className="p-4 whitespace-nowrap">
+                    {activeTab === 'disbursed' ? 'Disbursed Date' : activeTab === 'rejected' ? 'Date Applied' : 'Date Applied'}
+                  </th>
                   <th className="p-4 whitespace-nowrap">Status</th>
-                  <th className="p-4 rounded-r-xl whitespace-nowrap text-right">Actions</th>
+                  {activeTab === 'rejected' && (
+                    <th className="p-4 whitespace-nowrap">Reason</th>
+                  )}
+                  {activeTab === 'disbursed' && (
+                    <th className="p-4 whitespace-nowrap">Outstanding</th>
+                  )}
+                  {activeTab === 'action-required' && (
+                    <th className="p-4 rounded-r-xl whitespace-nowrap text-right">Actions</th>
+                  )}
                 </tr>
               </thead>
               <tbody className="text-dark dark:text-gray-200">
-                {loans.map(loan => (
+                {currentLoans.map(loan => (
                   <tr
                     key={loan.id}
                     className="border-b border-gray-50 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-750"
@@ -406,58 +553,92 @@ const Disbursements: React.FC = () => {
                       <LoanTypeBadge type={loan.loanType} />
                     </td>
                     <td className="p-4 text-subtext dark:text-gray-400 whitespace-nowrap">
-                      {formatDate(loan.createdAt)}
+                      {activeTab === 'disbursed' && loan.disbursementDate
+                        ? formatDate(loan.disbursementDate)
+                        : formatDate(loan.createdAt)}
                     </td>
                     <td className="p-4 whitespace-nowrap">
                       <StatusBadge status={loan.status} />
                     </td>
-                    <td className="p-4 flex justify-end gap-2 whitespace-nowrap">
-                      {loan.status === 'PENDING' && (
-                        <>
+                    {activeTab === 'rejected' && (
+                      <td className="p-4 text-subtext dark:text-gray-400 max-w-[200px] truncate" title={loan.rejectionReason || 'No reason provided'}>
+                        {loan.rejectionReason || <span className="italic text-gray-400">No reason provided</span>}
+                      </td>
+                    )}
+                    {activeTab === 'disbursed' && (
+                      <td className="p-4 font-medium whitespace-nowrap">
+                        {loan.outstandingBalance > 0 ? (
+                          <span className="text-orange-600 dark:text-orange-400">
+                            {formatCurrency(loan.outstandingBalance)}
+                          </span>
+                        ) : (
+                          <span className="text-green-600 dark:text-green-400">Paid Off</span>
+                        )}
+                      </td>
+                    )}
+                    {activeTab === 'action-required' && (
+                      <td className="p-4 flex justify-end gap-2 whitespace-nowrap">
+                        {loan.status === 'PENDING' && (
+                          <>
+                            <button
+                              onClick={() => handleApprove(loan.id)}
+                              disabled={actionLoading === loan.id}
+                              className="flex items-center gap-1 px-3 py-1.5 bg-green-500 text-white rounded-lg text-xs hover:bg-green-600 whitespace-nowrap transition disabled:opacity-50"
+                            >
+                              {actionLoading === loan.id ? (
+                                <Loader2 size={14} className="animate-spin" />
+                              ) : (
+                                <CheckCircle size={14} />
+                              )}
+                              Approve
+                            </button>
+                            <button
+                              onClick={() => setRejectModal({ isOpen: true, loan })}
+                              disabled={actionLoading === loan.id}
+                              className="flex items-center gap-1 px-3 py-1.5 bg-red-500 text-white rounded-lg text-xs hover:bg-red-600 whitespace-nowrap transition disabled:opacity-50"
+                            >
+                              <XCircle size={14} /> Reject
+                            </button>
+                          </>
+                        )}
+                        {loan.status === 'APPROVED' && (
                           <button
-                            onClick={() => handleApprove(loan.id)}
+                            onClick={() => handleDisburse(loan.id)}
                             disabled={actionLoading === loan.id}
-                            className="flex items-center gap-1 px-3 py-1.5 bg-green-500 text-white rounded-lg text-xs hover:bg-green-600 whitespace-nowrap transition disabled:opacity-50"
+                            className="flex items-center gap-1 px-3 py-1.5 bg-primary text-white rounded-lg text-xs hover:bg-blue-600 whitespace-nowrap transition disabled:opacity-50"
                           >
                             {actionLoading === loan.id ? (
                               <Loader2 size={14} className="animate-spin" />
                             ) : (
-                              <CheckCircle size={14} />
+                              <DollarSign size={14} />
                             )}
-                            Approve
+                            Disburse Funds
                           </button>
-                          <button
-                            onClick={() => setRejectModal({ isOpen: true, loan })}
-                            disabled={actionLoading === loan.id}
-                            className="flex items-center gap-1 px-3 py-1.5 bg-red-500 text-white rounded-lg text-xs hover:bg-red-600 whitespace-nowrap transition disabled:opacity-50"
-                          >
-                            <XCircle size={14} /> Reject
-                          </button>
-                        </>
-                      )}
-                      {loan.status === 'APPROVED' && (
-                        <button
-                          onClick={() => handleDisburse(loan.id)}
-                          disabled={actionLoading === loan.id}
-                          className="flex items-center gap-1 px-3 py-1.5 bg-primary text-white rounded-lg text-xs hover:bg-blue-600 whitespace-nowrap transition disabled:opacity-50"
-                        >
-                          {actionLoading === loan.id ? (
-                            <Loader2 size={14} className="animate-spin" />
-                          ) : (
-                            <DollarSign size={14} />
-                          )}
-                          Disburse Funds
-                        </button>
-                      )}
-                    </td>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
-                {loans.length === 0 && (
+                {currentLoans.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="py-12 text-center text-subtext dark:text-gray-400">
+                    <td colSpan={activeTab === 'action-required' ? 7 : activeTab === 'rejected' ? 7 : 7} className="py-12 text-center text-subtext dark:text-gray-400">
                       <div className="flex flex-col items-center gap-2">
-                        <CheckCircle size={32} className="text-gray-200 dark:text-gray-600" />
-                        <p>No pending loans requiring action.</p>
+                        {activeTab === 'action-required' ? (
+                          <>
+                            <CheckCircle size={32} className="text-gray-200 dark:text-gray-600" />
+                            <p>No pending loans requiring action.</p>
+                          </>
+                        ) : activeTab === 'disbursed' ? (
+                          <>
+                            <History size={32} className="text-gray-200 dark:text-gray-600" />
+                            <p>No disbursed loans found.</p>
+                          </>
+                        ) : (
+                          <>
+                            <Ban size={32} className="text-gray-200 dark:text-gray-600" />
+                            <p>No rejected loans found.</p>
+                          </>
+                        )}
                       </div>
                     </td>
                   </tr>

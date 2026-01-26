@@ -21,10 +21,15 @@ import {
   Users,
   DollarSign,
   Sun,
-  Moon
+  Moon,
+  UserCheck,
+  Building2,
+  ChevronDown,
+  Check,
+  Crown,
 } from 'lucide-react';
 import { useNotifications } from '../contexts/NotificationContext';
-import { UserResponse } from '../services/authService';
+import { UserResponse, GroupMembershipResponse } from '../services/authService';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -34,11 +39,33 @@ interface LayoutProps {
   isDark: boolean;
   toggleTheme: () => void;
   user: UserResponse | null;
+  // Multi-group support
+  availableGroups?: GroupMembershipResponse[];
+  hasMultipleGroups?: boolean;
+  selectedGroupId?: string | null;
+  onSwitchGroup?: (groupId: string) => Promise<void>;
 }
 
-const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate, onLogout, isDark, toggleTheme, user }) => {
+const Layout: React.FC<LayoutProps> = ({
+  children,
+  activePage,
+  onNavigate,
+  onLogout,
+  isDark,
+  toggleTheme,
+  user,
+  availableGroups = [],
+  hasMultipleGroups = false,
+  selectedGroupId,
+  onSwitchGroup
+}) => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [activeDropdown, setActiveDropdown] = useState<'settings' | 'notifications' | 'profile' | null>(null);
+  const [activeDropdown, setActiveDropdown] = useState<'settings' | 'notifications' | 'profile' | 'groups' | null>(null);
+  const [isSwitchingGroup, setIsSwitchingGroup] = useState(false);
+
+  // Get current group info
+  const currentGroup = availableGroups.find(g => g.groupId === selectedGroupId) || availableGroups[0];
+  const currentGroupName = currentGroup?.groupName || user?.member?.groupId ? 'My Group' : 'No Group';
 
   // Get notification data from context
   const { notifications, unreadCount, markAllAsRead } = useNotifications();
@@ -58,6 +85,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate, onLog
     { id: 'loans', label: 'Loans', icon: <CreditCard size={24} /> },
     { id: 'contributions', label: 'Contributions', icon: <HandCoins size={24} /> },
     { id: 'expenses', label: 'Expenses', icon: <Receipt size={24} /> },
+    { id: 'external-loans', label: 'External Loans', icon: <UserCheck size={24} /> },
   ];
 
   // Admin/Treasurer only items
@@ -68,14 +96,31 @@ const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate, onLog
   }
 
   const systemNavItems = [
+    { id: 'billing', label: 'Billing', icon: <Crown size={24} /> },
     { id: 'settings', label: 'Settings', icon: <SettingsIcon size={24} /> },
   ];
 
-  const toggleDropdown = (name: 'settings' | 'notifications' | 'profile') => {
+  const toggleDropdown = (name: 'settings' | 'notifications' | 'profile' | 'groups') => {
     if (activeDropdown === name) {
       setActiveDropdown(null);
     } else {
       setActiveDropdown(name);
+    }
+  };
+
+  const handleSwitchGroup = async (groupId: string) => {
+    if (!onSwitchGroup || groupId === selectedGroupId) {
+      setActiveDropdown(null);
+      return;
+    }
+    setIsSwitchingGroup(true);
+    try {
+      await onSwitchGroup(groupId);
+    } catch (err) {
+      console.error('Failed to switch group:', err);
+    } finally {
+      setIsSwitchingGroup(false);
+      setActiveDropdown(null);
     }
   };
 
@@ -274,9 +319,81 @@ const Layout: React.FC<LayoutProps> = ({ children, activePage, onNavigate, onLog
 
           {/* Desktop Right Actions (with Popups) */}
           <div className="hidden md:flex items-center gap-4 md:gap-8 justify-end relative">
-            
+
+            {/* Group Switcher - Only show if user has multiple groups */}
+            {hasMultipleGroups && availableGroups.length > 1 && (
+              <div className="relative">
+                <button
+                  onClick={() => toggleDropdown('groups')}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl transition-colors shadow-sm ${
+                    activeDropdown === 'groups'
+                      ? 'bg-blue-50 dark:bg-gray-700 text-primary'
+                      : 'bg-white dark:bg-gray-800 text-subtext dark:text-gray-300 hover:bg-blue-50 dark:hover:bg-gray-700 hover:text-primary'
+                  }`}
+                  title="Switch Group"
+                  disabled={isSwitchingGroup}
+                >
+                  <Building2 size={18} />
+                  <span className="font-medium text-sm max-w-[120px] truncate">{currentGroupName}</span>
+                  <ChevronDown size={16} className={`transition-transform ${activeDropdown === 'groups' ? 'rotate-180' : ''}`} />
+                </button>
+
+                {/* Groups Dropdown */}
+                {activeDropdown === 'groups' && (
+                  <div className="absolute top-full right-0 mt-3 w-72 bg-white dark:bg-gray-800 rounded-2xl shadow-xl border border-gray-100 dark:border-gray-700 overflow-hidden z-40 animate-in fade-in slide-in-from-top-2">
+                    <div className="p-4 border-b border-gray-50 dark:border-gray-700">
+                      <h4 className="font-bold text-dark dark:text-white">Switch Group</h4>
+                      <p className="text-xs text-subtext dark:text-gray-400 mt-1">Select which group to view</p>
+                    </div>
+                    <div className="max-h-64 overflow-y-auto p-2">
+                      {availableGroups.map((group) => (
+                        <button
+                          key={group.groupId}
+                          onClick={() => handleSwitchGroup(group.groupId)}
+                          disabled={isSwitchingGroup}
+                          className={`w-full text-left p-3 rounded-xl transition flex items-center justify-between gap-2 ${
+                            group.groupId === selectedGroupId
+                              ? 'bg-primary/10 text-primary'
+                              : 'hover:bg-bgLight dark:hover:bg-gray-700 text-subtext dark:text-gray-300'
+                          } ${isSwitchingGroup ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <p className={`font-medium text-sm truncate ${group.groupId === selectedGroupId ? 'text-primary' : 'text-dark dark:text-white'}`}>
+                              {group.groupName}
+                            </p>
+                            <p className="text-xs text-subtext dark:text-gray-400 truncate">
+                              {group.memberNumber} · {group.role}
+                            </p>
+                          </div>
+                          {group.groupId === selectedGroupId && (
+                            <Check size={16} className="text-primary shrink-0" />
+                          )}
+                          {group.isDefault && group.groupId !== selectedGroupId && (
+                            <span className="text-[10px] bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 rounded shrink-0">
+                              Default
+                            </span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="p-3 border-t border-gray-50 dark:border-gray-700 bg-gray-50 dark:bg-gray-750 text-center">
+                      <button
+                        onClick={() => {
+                          setActiveDropdown(null);
+                          onNavigate('settings');
+                        }}
+                        className="text-xs text-primary hover:underline font-medium"
+                      >
+                        Manage Default Group
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Dark Mode Toggle */}
-             <button 
+             <button
                 onClick={toggleTheme}
                 className="w-12 h-12 rounded-full flex items-center justify-center transition-colors shadow-sm bg-white dark:bg-gray-800 text-subtext dark:text-gray-300 hover:bg-blue-50 dark:hover:bg-gray-700 hover:text-primary"
                 title={isDark ? "Switch to Light Mode" : "Switch to Dark Mode"}

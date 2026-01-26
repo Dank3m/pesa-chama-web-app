@@ -154,7 +154,7 @@ export interface GuarantorExposureResponse {
 }
 
 export type LoanType = 'REGULAR' | 'CONTRIBUTION_DEFAULT' | 'GUARANTEED';
-export type LoanStatus = 'PENDING' | 'APPROVED' | 'DISBURSED' | 'ACTIVE' | 'PAID_OFF' | 'DEFAULTED' | 'WRITTEN_OFF';
+export type LoanStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'DISBURSED' | 'ACTIVE' | 'PAID_OFF' | 'DEFAULTED' | 'WRITTEN_OFF';
 export type ExternalBorrowerStatus = 'ACTIVE' | 'SUSPENDED' | 'BLACKLISTED' | 'INACTIVE';
 export type GuarantorStatus = 'PENDING' | 'ACTIVE' | 'RELEASED' | 'DEFAULTED' | 'DECLINED';
 

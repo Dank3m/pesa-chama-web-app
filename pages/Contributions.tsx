@@ -2,12 +2,15 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   PiggyBank, Calendar, TrendingUp, Loader2, AlertCircle,
   CheckCircle, Clock, XCircle, Download, ChevronDown,
-  File, FileSpreadsheet, FileText, Search, ToggleLeft, ToggleRight
+  File, FileSpreadsheet, FileText, Search, ToggleLeft, ToggleRight,
+  Plus, X, User, DollarSign, CreditCard, FileEdit
 } from 'lucide-react';
 import StatCard from '../components/StatCard';
 import { useAuth } from '../contexts/AuthContext';
 import { useAppData } from '../contexts/AppDataContext';
 import api, { TokenService } from '../services/api';
+import { contributionService, PaymentMethod, RecordContributionRequest } from '../services/contributionService';
+import { memberService, MemberResponse } from '../services/memberService';
 
 // --- Types ---
 interface Contribution {
@@ -106,6 +109,29 @@ const Contributions: React.FC = () => {
   const [showMyContributionsOnly, setShowMyContributionsOnly] = useState(false);
   const isAdminOrTreasurer = user?.role === 'ADMIN' || user?.role === 'TREASURER';
 
+  // Record Contribution Modal state
+  const [showRecordModal, setShowRecordModal] = useState(false);
+  const [members, setMembers] = useState<MemberResponse[]>([]);
+  const [isLoadingMembers, setIsLoadingMembers] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordError, setRecordError] = useState<string | null>(null);
+  const [recordSuccess, setRecordSuccess] = useState(false);
+  const [recordFormData, setRecordFormData] = useState<{
+    memberId: string;
+    cycleId: string;
+    amount: string;
+    referenceNumber: string;
+    paymentMethod: PaymentMethod;
+    notes: string;
+  }>({
+    memberId: '',
+    cycleId: '',
+    amount: '',
+    referenceNumber: '',
+    paymentMethod: 'MPESA',
+    notes: '',
+  });
+
   // Fetch contributions
   const fetchContributions = useCallback(async () => {
     if (!user?.member?.id) return;
@@ -158,6 +184,93 @@ const Contributions: React.FC = () => {
     fetchContributions();
     fetchCurrentCycle();
   }, [fetchContributions, fetchCurrentCycle]);
+
+  // Fetch members when modal opens
+  const fetchMembers = useCallback(async () => {
+    if (!currentGroup?.id) return;
+
+    setIsLoadingMembers(true);
+    try {
+      const membersList = await memberService.getActiveMembersByGroup(currentGroup.id);
+      setMembers(membersList);
+    } catch (err: any) {
+      console.error('Failed to fetch members:', err);
+    } finally {
+      setIsLoadingMembers(false);
+    }
+  }, [currentGroup?.id]);
+
+  // Open record modal
+  const openRecordModal = () => {
+    setShowRecordModal(true);
+    setRecordError(null);
+    setRecordSuccess(false);
+    setRecordFormData({
+      memberId: '',
+      cycleId: currentCycle?.id || '',
+      amount: currentCycle?.expectedAmount?.toString() || '',
+      referenceNumber: '',
+      paymentMethod: 'MPESA',
+      notes: '',
+    });
+    fetchMembers();
+  };
+
+  // Close record modal
+  const closeRecordModal = () => {
+    setShowRecordModal(false);
+    setRecordError(null);
+    setRecordSuccess(false);
+  };
+
+  // Handle record contribution submit
+  const handleRecordContribution = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRecordError(null);
+
+    // Validation
+    if (!recordFormData.memberId) {
+      setRecordError('Please select a member');
+      return;
+    }
+    if (!recordFormData.cycleId) {
+      setRecordError('Please select a contribution cycle');
+      return;
+    }
+    if (!recordFormData.amount || parseFloat(recordFormData.amount) <= 0) {
+      setRecordError('Please enter a valid amount');
+      return;
+    }
+
+    setIsRecording(true);
+
+    try {
+      const request: RecordContributionRequest = {
+        memberId: recordFormData.memberId,
+        cycleId: recordFormData.cycleId,
+        amount: parseFloat(recordFormData.amount),
+        referenceNumber: recordFormData.referenceNumber || undefined,
+        paymentMethod: recordFormData.paymentMethod,
+        notes: recordFormData.notes || undefined,
+      };
+
+      await contributionService.recordContribution(request);
+      setRecordSuccess(true);
+
+      // Refresh contributions after recording
+      fetchContributions();
+      fetchCurrentCycle();
+
+      // Close modal after short delay
+      setTimeout(() => {
+        closeRecordModal();
+      }, 1500);
+    } catch (err: any) {
+      setRecordError(err?.message || 'Failed to record contribution');
+    } finally {
+      setIsRecording(false);
+    }
+  };
 
   // Calculate summaries
   const summary = useMemo(() => {
@@ -372,6 +485,17 @@ const Contributions: React.FC = () => {
               </button>
             )}
 
+            {/* Record Contribution Button - Admin/Treasurer only */}
+            {isAdminOrTreasurer && (
+              <button
+                onClick={openRecordModal}
+                className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-full text-sm font-medium hover:bg-blue-700 transition"
+              >
+                <Plus size={16} />
+                Record Contribution
+              </button>
+            )}
+
             {/* Export Dropdown */}
             <div className="relative">
             <button
@@ -582,6 +706,188 @@ const Contributions: React.FC = () => {
       {/* Click outside to close export menu */}
       {showExportMenu && (
         <div className="fixed inset-0 z-0" onClick={() => setShowExportMenu(false)} />
+      )}
+
+      {/* Record Contribution Modal */}
+      {showRecordModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-3xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-700">
+              <h2 className="text-xl font-bold text-dark dark:text-white flex items-center gap-2">
+                <PiggyBank size={24} className="text-primary" />
+                Record Contribution
+              </h2>
+              <button
+                onClick={closeRecordModal}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition"
+              >
+                <X size={20} className="text-subtext dark:text-gray-400" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <form onSubmit={handleRecordContribution} className="p-6 space-y-5">
+              {/* Success Message */}
+              {recordSuccess && (
+                <div className="p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl flex items-center gap-3">
+                  <CheckCircle className="text-green-500 flex-shrink-0" size={20} />
+                  <p className="text-green-700 dark:text-green-400 text-sm font-medium">
+                    Contribution recorded successfully!
+                  </p>
+                </div>
+              )}
+
+              {/* Error Message */}
+              {recordError && (
+                <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl flex items-center gap-3">
+                  <AlertCircle className="text-red-500 flex-shrink-0" size={20} />
+                  <p className="text-red-700 dark:text-red-400 text-sm">{recordError}</p>
+                </div>
+              )}
+
+              {/* Member Selection */}
+              <div>
+                <label className="block text-sm font-medium text-dark dark:text-gray-200 mb-2">
+                  <User size={16} className="inline mr-2" />
+                  Member *
+                </label>
+                {isLoadingMembers ? (
+                  <div className="flex items-center gap-2 py-3 text-subtext dark:text-gray-400">
+                    <Loader2 size={16} className="animate-spin" />
+                    Loading members...
+                  </div>
+                ) : (
+                  <select
+                    value={recordFormData.memberId}
+                    onChange={(e) => setRecordFormData({ ...recordFormData, memberId: e.target.value })}
+                    className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-dark dark:text-white focus:bg-white dark:focus:bg-gray-600 focus:border-primary outline-none transition-colors"
+                    disabled={isRecording}
+                  >
+                    <option value="">Select a member</option>
+                    {members.map((member) => (
+                      <option key={member.id} value={member.id}>
+                        {member.fullName} ({member.memberNumber})
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              {/* Cycle Selection */}
+              <div>
+                <label className="block text-sm font-medium text-dark dark:text-gray-200 mb-2">
+                  <Calendar size={16} className="inline mr-2" />
+                  Contribution Cycle *
+                </label>
+                <select
+                  value={recordFormData.cycleId}
+                  onChange={(e) => setRecordFormData({ ...recordFormData, cycleId: e.target.value })}
+                  className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-dark dark:text-white focus:bg-white dark:focus:bg-gray-600 focus:border-primary outline-none transition-colors"
+                  disabled={isRecording}
+                >
+                  <option value="">Select a cycle</option>
+                  {currentCycle && (
+                    <option value={currentCycle.id}>
+                      {formatMonth(currentCycle.cycleMonth)} (Current - {formatCurrency(currentCycle.expectedAmount)})
+                    </option>
+                  )}
+                </select>
+                <p className="mt-1 text-xs text-subtext dark:text-gray-500">
+                  Expected amount: {currentCycle ? formatCurrency(currentCycle.expectedAmount) : '-'}
+                </p>
+              </div>
+
+              {/* Amount */}
+              <div>
+                <label className="block text-sm font-medium text-dark dark:text-gray-200 mb-2">
+                  <DollarSign size={16} className="inline mr-2" />
+                  Amount (KES) *
+                </label>
+                <input
+                  type="number"
+                  value={recordFormData.amount}
+                  onChange={(e) => setRecordFormData({ ...recordFormData, amount: e.target.value })}
+                  placeholder="Enter amount"
+                  min="0"
+                  step="0.01"
+                  className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-dark dark:text-white focus:bg-white dark:focus:bg-gray-600 focus:border-primary outline-none transition-colors"
+                  disabled={isRecording}
+                />
+              </div>
+
+              {/* Payment Method */}
+              <div>
+                <label className="block text-sm font-medium text-dark dark:text-gray-200 mb-2">
+                  <CreditCard size={16} className="inline mr-2" />
+                  Payment Method *
+                </label>
+                <select
+                  value={recordFormData.paymentMethod}
+                  onChange={(e) => setRecordFormData({ ...recordFormData, paymentMethod: e.target.value as PaymentMethod })}
+                  className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-dark dark:text-white focus:bg-white dark:focus:bg-gray-600 focus:border-primary outline-none transition-colors"
+                  disabled={isRecording}
+                >
+                  <option value="MPESA">M-Pesa</option>
+                  <option value="BANK_TRANSFER">Bank Transfer</option>
+                  <option value="CASH">Cash</option>
+                  <option value="CHEQUE">Cheque</option>
+                </select>
+              </div>
+
+              {/* Reference Number */}
+              <div>
+                <label className="block text-sm font-medium text-dark dark:text-gray-200 mb-2">
+                  Reference Number
+                </label>
+                <input
+                  type="text"
+                  value={recordFormData.referenceNumber}
+                  onChange={(e) => setRecordFormData({ ...recordFormData, referenceNumber: e.target.value })}
+                  placeholder="e.g., M-Pesa transaction code"
+                  className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-dark dark:text-white focus:bg-white dark:focus:bg-gray-600 focus:border-primary outline-none transition-colors"
+                  disabled={isRecording}
+                />
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="block text-sm font-medium text-dark dark:text-gray-200 mb-2">
+                  <FileEdit size={16} className="inline mr-2" />
+                  Notes
+                </label>
+                <textarea
+                  value={recordFormData.notes}
+                  onChange={(e) => setRecordFormData({ ...recordFormData, notes: e.target.value })}
+                  placeholder="Optional notes about this contribution"
+                  rows={3}
+                  className="w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700 text-dark dark:text-white focus:bg-white dark:focus:bg-gray-600 focus:border-primary outline-none transition-colors resize-none"
+                  disabled={isRecording}
+                />
+              </div>
+
+              {/* Submit Button */}
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={closeRecordModal}
+                  className="flex-1 px-4 py-3 border border-gray-200 dark:border-gray-600 text-subtext dark:text-gray-300 rounded-xl font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition"
+                  disabled={isRecording}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isRecording || recordSuccess}
+                  className="flex-1 px-4 py-3 bg-primary text-white rounded-xl font-bold hover:bg-blue-700 transition flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                >
+                  {isRecording && <Loader2 size={20} className="animate-spin" />}
+                  {isRecording ? 'Recording...' : 'Record Contribution'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );

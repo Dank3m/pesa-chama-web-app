@@ -27,6 +27,7 @@ import {
   ChevronDown,
   Check,
   Crown,
+  TrendingUp,
 } from 'lucide-react';
 import { useNotifications } from '../contexts/NotificationContext';
 import { UserResponse, GroupMembershipResponse } from '../services/authService';
@@ -86,6 +87,7 @@ const Layout: React.FC<LayoutProps> = ({
     { id: 'contributions', label: 'Contributions', icon: <HandCoins size={24} /> },
     { id: 'expenses', label: 'Expenses', icon: <Receipt size={24} /> },
     { id: 'external-loans', label: 'External Loans', icon: <UserCheck size={24} /> },
+    { id: 'investments', label: 'Investments', icon: <TrendingUp size={24} /> },
   ];
 
   // Admin/Treasurer only items

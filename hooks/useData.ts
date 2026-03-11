@@ -9,7 +9,11 @@ import api from '../services/api';
 
 export interface DashboardData {
   totalBalance: number;
+  openingBalance: number;
   totalContributions: number;
+  totalRepayments: number;
+  totalDisbursements: number;
+  totalExpenses: number;
   activeLoans: number;
   memberCount: number;
   collectionRate: number;

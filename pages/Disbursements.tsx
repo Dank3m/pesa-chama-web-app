@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   CheckCircle, XCircle, DollarSign, Clock, Wallet,
-  CreditCard, Loader2, AlertCircle, X, Ban, History
+  CreditCard, Loader2, AlertCircle, X, Ban, History, Smartphone
 } from 'lucide-react';
 import StatCard from '../components/StatCard';
 import { useAuth } from '../contexts/AuthContext';
@@ -196,6 +196,172 @@ const RejectModal: React.FC<RejectModalProps> = ({
   );
 };
 
+// --- Disbursement Channel Modal Component ---
+interface DisbursementChannelModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  loan: Loan | null;
+  onSubmit: (data: { loanId: string; disbursementChannel: string; phoneNumber?: string; bankAccount?: string; bankCode?: string }) => Promise<void>;
+}
+
+const DisbursementChannelModal: React.FC<DisbursementChannelModalProps> = ({ isOpen, onClose, loan, onSubmit }) => {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [channel, setChannel] = useState<'MPESA' | 'BANK'>('MPESA');
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [bankAccount, setBankAccount] = useState('');
+  const [bankCode, setBankCode] = useState('');
+
+  useEffect(() => {
+    if (isOpen) {
+      setChannel('MPESA');
+      setPhoneNumber('');
+      setBankAccount('');
+      setBankCode('');
+      setError(null);
+    }
+  }, [isOpen]);
+
+  if (!isOpen || !loan) return null;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+
+    try {
+      await onSubmit({
+        loanId: loan.id,
+        disbursementChannel: channel,
+        ...(phoneNumber && { phoneNumber }),
+        ...(channel === 'BANK' && bankAccount && { bankAccount }),
+        ...(channel === 'BANK' && bankCode && { bankCode }),
+      });
+      onClose();
+    } catch (err: any) {
+      setError(err.message || 'Failed to disburse loan');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const { formatCurrency } = useAppData();
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm">
+      <div className="bg-white dark:bg-gray-800 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col max-h-[90vh] transition-colors">
+        <div className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-700 shrink-0">
+          <h3 className="text-xl font-bold text-dark dark:text-white">Disburse Loan</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-full">
+            <X size={24} />
+          </button>
+        </div>
+
+        <div className="overflow-y-auto p-6">
+          <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl">
+            <p className="text-sm text-subtext dark:text-gray-400">Loan: <span className="font-semibold text-dark dark:text-white">{loan.loanNumber}</span></p>
+            <p className="text-sm text-subtext dark:text-gray-400">Member: <span className="font-semibold text-dark dark:text-white">{loan.memberName}</span></p>
+            <p className="text-sm text-subtext dark:text-gray-400">Amount: <span className="font-semibold text-dark dark:text-white">{formatCurrency(loan.principalAmount)}</span></p>
+          </div>
+
+          {error && (
+            <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-xl text-sm flex items-center gap-2">
+              <AlertCircle size={18} />
+              {error}
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <div>
+              <label className="block text-sm font-medium text-subtext dark:text-gray-400 mb-2">Disbursement Channel</label>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setChannel('MPESA')}
+                  className={`flex-1 py-3 rounded-xl font-medium text-sm transition border ${
+                    channel === 'MPESA'
+                      ? 'bg-green-50 dark:bg-green-900/20 border-green-500 text-green-700 dark:text-green-400'
+                      : 'bg-bgLight dark:bg-gray-700 border-transparent text-subtext dark:text-gray-400 hover:border-gray-300'
+                  }`}
+                >
+                  M-Pesa
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChannel('BANK')}
+                  className={`flex-1 py-3 rounded-xl font-medium text-sm transition border ${
+                    channel === 'BANK'
+                      ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-500 text-blue-700 dark:text-blue-400'
+                      : 'bg-bgLight dark:bg-gray-700 border-transparent text-subtext dark:text-gray-400 hover:border-gray-300'
+                  }`}
+                >
+                  Bank Transfer
+                </button>
+              </div>
+            </div>
+
+            {channel === 'MPESA' && (
+              <div>
+                <label className="block text-sm font-medium text-subtext dark:text-gray-400 mb-2">Phone Number (optional override)</label>
+                <input
+                  type="text"
+                  value={phoneNumber}
+                  onChange={(e) => setPhoneNumber(e.target.value)}
+                  placeholder="Uses member's phone if empty"
+                  className="w-full px-4 py-3 bg-bgLight dark:bg-gray-900 rounded-xl border border-transparent dark:border-gray-700 focus:border-primary outline-none text-dark dark:text-white font-medium transition"
+                />
+              </div>
+            )}
+
+            {channel === 'BANK' && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-subtext dark:text-gray-400 mb-2">Bank Account Number</label>
+                  <input
+                    type="text"
+                    value={bankAccount}
+                    onChange={(e) => setBankAccount(e.target.value)}
+                    placeholder="Uses member's bank account if empty"
+                    className="w-full px-4 py-3 bg-bgLight dark:bg-gray-900 rounded-xl border border-transparent dark:border-gray-700 focus:border-primary outline-none text-dark dark:text-white font-medium transition"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-subtext dark:text-gray-400 mb-2">Bank Code</label>
+                  <input
+                    type="text"
+                    value={bankCode}
+                    onChange={(e) => setBankCode(e.target.value)}
+                    placeholder="Uses member's bank code if empty"
+                    className="w-full px-4 py-3 bg-bgLight dark:bg-gray-900 rounded-xl border border-transparent dark:border-gray-700 focus:border-primary outline-none text-dark dark:text-white font-medium transition"
+                  />
+                </div>
+              </>
+            )}
+
+            <div className="pt-2 flex gap-3">
+              <button
+                type="button"
+                onClick={onClose}
+                className="flex-1 py-3 text-subtext font-medium hover:text-dark dark:hover:text-white transition bg-gray-50 dark:bg-gray-700 dark:text-gray-400 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-600"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={loading}
+                className="flex-1 bg-primary text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition flex justify-center items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+              >
+                {loading && <Loader2 className="animate-spin" size={20} />}
+                {loading ? 'Disbursing...' : 'Disburse Loan'}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // --- Main Component ---
 const Disbursements: React.FC = () => {
   const { user } = useAuth();
@@ -220,6 +386,9 @@ const Disbursements: React.FC = () => {
     isOpen: boolean;
     loan: Loan | null;
   }>({ isOpen: false, loan: null });
+
+  // Disbursement modal state
+  const [disbursementModal, setDisbursementModal] = useState<{ isOpen: boolean; loan: Loan | null }>({ isOpen: false, loan: null });
 
   // Fetch pending and approved loans (action required)
   const fetchActionRequiredLoans = useCallback(async () => {
@@ -343,10 +512,16 @@ const Disbursements: React.FC = () => {
   };
 
   // Disburse loan handler
-  const handleDisburse = async (loanId: string) => {
-    setActionLoading(loanId);
+  const handleDisburseSubmit = async (data: { loanId: string; disbursementChannel: string; phoneNumber?: string; bankAccount?: string; bankCode?: string }) => {
+    setActionLoading(data.loanId);
     try {
-      await api.post(`/loans/${loanId}/disburse`);
+      await api.post(`/loans/${data.loanId}/disburse`, {
+        loanId: data.loanId,
+        disbursementChannel: data.disbursementChannel,
+        phoneNumber: data.phoneNumber,
+        bankAccount: data.bankAccount,
+        bankCode: data.bankCode,
+      });
       await Promise.all([fetchActionRequiredLoans(), fetchDisbursedLoans(), fetchStats()]);
     } catch (err: any) {
       console.error('Error disbursing loan:', err);
@@ -603,7 +778,7 @@ const Disbursements: React.FC = () => {
                         )}
                         {loan.status === 'APPROVED' && (
                           <button
-                            onClick={() => handleDisburse(loan.id)}
+                            onClick={() => setDisbursementModal({ isOpen: true, loan })}
                             disabled={actionLoading === loan.id}
                             className="flex items-center gap-1 px-3 py-1.5 bg-primary text-white rounded-lg text-xs hover:bg-blue-600 whitespace-nowrap transition disabled:opacity-50"
                           >
@@ -657,6 +832,14 @@ const Disbursements: React.FC = () => {
         loanNumber={rejectModal.loan?.loanNumber || ''}
         memberName={rejectModal.loan?.memberName || ''}
         amount={rejectModal.loan?.principalAmount || 0}
+      />
+
+      {/* Disbursement Channel Modal */}
+      <DisbursementChannelModal
+        isOpen={disbursementModal.isOpen}
+        onClose={() => setDisbursementModal({ isOpen: false, loan: null })}
+        loan={disbursementModal.loan}
+        onSubmit={handleDisburseSubmit}
       />
     </div>
   );

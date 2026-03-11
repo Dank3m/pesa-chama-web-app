@@ -1,11 +1,12 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import {
   Briefcase, User, Calculator, X, Loader2,
   ChevronRight, Calendar, Percent, Clock, AlertCircle,
   CheckCircle, XCircle, Banknote, Wallet, TrendingDown, CreditCard,
-  ToggleLeft, ToggleRight
+  ToggleLeft, ToggleRight, Smartphone
 } from 'lucide-react';
 import StatCard from '../components/StatCard';
+import { stkPushService, StkPushStatus } from '../services/stkPushService';
 import { useAuth } from '../contexts/AuthContext';
 import { useAppData } from '../contexts/AppDataContext';
 import api, { TokenService } from '../services/api';
@@ -27,9 +28,13 @@ interface Loan {
   totalAmountDue: number;
   totalAmountPaid: number;
   outstandingBalance: number;
-  status: 'PENDING' | 'APPROVED' | 'DISBURSED' | 'ACTIVE' | 'REPAID' | 'REJECTED' | 'OVERDUE';
+  status: 'PENDING' | 'APPROVED' | 'DISBURSED' | 'ACTIVE' | 'PAID_OFF' | 'REJECTED' | 'OVERDUE' | 'DEFAULTED' | 'WRITTEN_OFF';
   daysActive: number;
   createdAt: string;
+  disbursementChannel?: string | null;
+  disbursementStatus?: string | null;
+  disbursementReference?: string | null;
+  disbursementFailureReason?: string | null;
 }
 
 interface LoanRepayment {
@@ -221,9 +226,15 @@ interface LoanRepaymentModalProps {
   onClose: () => void;
   loan: Loan | null;
   onSubmit: (data: { loanId: string; amount: number; paymentMethod: string; referenceNumber: string }) => Promise<void>;
+  defaultPhone?: string;
+  onPaymentComplete?: () => void;
 }
 
-const LoanRepaymentModal: React.FC<LoanRepaymentModalProps> = ({ isOpen, onClose, loan, onSubmit }) => {
+const POLL_INTERVAL_MS = 3000;
+const TIMEOUT_MS = 120000; // 2 minutes
+
+const LoanRepaymentModal: React.FC<LoanRepaymentModalProps> = ({ isOpen, onClose, loan, onSubmit, defaultPhone = '', onPaymentComplete }) => {
+  const { formatCurrency } = useAppData();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
@@ -231,6 +242,29 @@ const LoanRepaymentModal: React.FC<LoanRepaymentModalProps> = ({ isOpen, onClose
     paymentMethod: 'MPESA',
     referenceNumber: ''
   });
+
+  // M-Pesa STK Push state
+  const [mpesaStep, setMpesaStep] = useState<'input' | 'processing' | 'result'>('input');
+  const [phoneNumber, setPhoneNumber] = useState(defaultPhone);
+  const [collectionRef, setCollectionRef] = useState<string | null>(null);
+  const [mpesaStatus, setMpesaStatus] = useState<StkPushStatus | null>(null);
+  const [mpesaError, setMpesaError] = useState<string | null>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (isOpen && loan) {
@@ -240,20 +274,134 @@ const LoanRepaymentModal: React.FC<LoanRepaymentModalProps> = ({ isOpen, onClose
         referenceNumber: ''
       });
       setError(null);
+      // Reset M-Pesa state
+      setMpesaStep('input');
+      setPhoneNumber(defaultPhone);
+      setCollectionRef(null);
+      setMpesaStatus(null);
+      setMpesaError(null);
     }
-  }, [isOpen, loan]);
+  }, [isOpen, loan, defaultPhone]);
+
+  // Reset M-Pesa state when payment method changes
+  useEffect(() => {
+    if (formData.paymentMethod === 'MPESA') {
+      setMpesaStep('input');
+      setCollectionRef(null);
+      setMpesaStatus(null);
+      setMpesaError(null);
+    }
+  }, [formData.paymentMethod]);
 
   if (!isOpen || !loan) return null;
+
+  // Rounding: all payment channels require whole number amounts
+  const hasDecimals = formData.amount % 1 !== 0;
+  const roundedAmount = hasDecimals ? Math.ceil(formData.amount) : formData.amount;
+  const excessAmount = hasDecimals ? +(roundedAmount - formData.amount).toFixed(2) : 0;
+
+  const stopPolling = () => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+  };
+
+  const startPolling = (ref: string) => {
+    stopPolling();
+
+    pollIntervalRef.current = setInterval(async () => {
+      try {
+        const statusResponse = await stkPushService.getStatus(ref);
+        if (statusResponse.status === 'COMPLETED' || statusResponse.status === 'SUCCESS') {
+          stopPolling();
+          setMpesaStatus(statusResponse);
+          setMpesaStep('result');
+        } else if (statusResponse.status === 'FAILED' || statusResponse.status === 'CANCELLED') {
+          stopPolling();
+          setMpesaStatus(statusResponse);
+          setMpesaError(statusResponse.statusDescription || 'Payment was not completed.');
+          setMpesaStep('result');
+        }
+        // If still PENDING, keep polling
+      } catch (err: any) {
+        // Don't stop polling on transient errors
+        console.error('Status poll error:', err);
+      }
+    }, POLL_INTERVAL_MS);
+
+    // Timeout after 2 minutes
+    timeoutRef.current = setTimeout(() => {
+      stopPolling();
+      setMpesaError('Payment confirmation timed out. Please check your M-Pesa messages and try again if the payment was not completed.');
+      setMpesaStep('result');
+    }, TIMEOUT_MS);
+  };
+
+  const handleMpesaInitiate = async () => {
+    if (!phoneNumber.trim()) {
+      setError('Please enter a phone number.');
+      return;
+    }
+    const cleaned = phoneNumber.replace(/\s/g, '');
+    if (!/^(07|01)\d{8}$/.test(cleaned)) {
+      setError('Please enter a valid Kenyan phone number (e.g., 0712345678).');
+      return;
+    }
+
+    setError(null);
+    setLoading(true);
+    try {
+      const response = await stkPushService.initiate({
+        sourceId: loan.id,
+        sourceType: 'LOAN_REPAYMENT',
+        amount: formData.amount,
+        phoneNumber: cleaned,
+      });
+      setCollectionRef(response.collectionRef);
+      setMpesaStep('processing');
+      startPolling(response.collectionRef);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to initiate M-Pesa payment.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleMpesaTryAgain = () => {
+    stopPolling();
+    setMpesaStep('input');
+    setCollectionRef(null);
+    setMpesaStatus(null);
+    setMpesaError(null);
+    setError(null);
+  };
+
+  const handleMpesaDone = () => {
+    stopPolling();
+    onPaymentComplete?.();
+    onClose();
+  };
+
+  const handleClose = () => {
+    if (mpesaStep === 'processing') return; // Don't allow close during processing
+    stopPolling();
+    onClose();
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
-    
+
     try {
       await onSubmit({
         loanId: loan.id,
-        amount: Number(formData.amount),
+        amount: roundedAmount,
         paymentMethod: formData.paymentMethod,
         referenceNumber: formData.referenceNumber
       });
@@ -265,102 +413,423 @@ const LoanRepaymentModal: React.FC<LoanRepaymentModalProps> = ({ isOpen, onClose
     }
   };
 
+  const isMpesa = formData.paymentMethod === 'MPESA';
+  const isSuccess = mpesaStep === 'result' && mpesaStatus && (mpesaStatus.status === 'COMPLETED' || mpesaStatus.status === 'SUCCESS');
+  const isFailed = mpesaStep === 'result' && !isSuccess;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm">
       <div className="bg-white dark:bg-gray-800 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden">
         <div className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-700">
-          <h3 className="text-xl font-bold text-dark dark:text-white">Make Repayment</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1 rounded-full">
-            <X size={24} />
-          </button>
+          <h3 className="text-xl font-bold text-dark dark:text-white">
+            {isMpesa && mpesaStep === 'result' && isSuccess ? 'Payment Complete' : 'Make Repayment'}
+          </h3>
+          {!(isMpesa && mpesaStep === 'processing') && (
+            <button onClick={handleClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 p-1 rounded-full">
+              <X size={24} />
+            </button>
+          )}
         </div>
-        
+
         <div className="p-6">
-          {/* Loan Info */}
-          <div className="bg-bgLight dark:bg-gray-700 rounded-xl p-4 mb-6">
-            <div className="flex justify-between mb-2">
-              <span className="text-subtext dark:text-gray-400">Loan Number</span>
-              <span className="font-medium text-dark dark:text-white">{loan.loanNumber}</span>
+          {/* Loan Info - hide during M-Pesa processing/result */}
+          {!(isMpesa && mpesaStep !== 'input') && (
+            <div className="bg-bgLight dark:bg-gray-700 rounded-xl p-4 mb-6">
+              <div className="flex justify-between mb-2">
+                <span className="text-subtext dark:text-gray-400">Loan Number</span>
+                <span className="font-medium text-dark dark:text-white">{loan.loanNumber}</span>
+              </div>
+              <div className="flex justify-between mb-2">
+                <span className="text-subtext dark:text-gray-400">Outstanding Balance</span>
+                <span className="font-bold text-red-500">KES {loan.outstandingBalance.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-subtext dark:text-gray-400">Total Interest</span>
+                <span className="font-medium text-dark dark:text-white">KES {loan.totalInterestAccrued.toLocaleString()}</span>
+              </div>
             </div>
-            <div className="flex justify-between mb-2">
-              <span className="text-subtext dark:text-gray-400">Outstanding Balance</span>
-              <span className="font-bold text-red-500">KES {loan.outstandingBalance.toLocaleString()}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-subtext dark:text-gray-400">Total Interest</span>
-              <span className="font-medium text-dark dark:text-white">KES {loan.totalInterestAccrued.toLocaleString()}</span>
-            </div>
-          </div>
-          
+          )}
+
           {error && (
             <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-xl text-sm flex items-center gap-2">
               <AlertCircle size={18} />
               {error}
             </div>
           )}
-          
+
+          {/* M-Pesa Processing Step */}
+          {isMpesa && mpesaStep === 'processing' && (
+            <div className="flex flex-col items-center py-8 space-y-4">
+              <Loader2 size={48} className="animate-spin text-green-600" />
+              <div className="text-center">
+                <p className="text-lg font-bold text-dark dark:text-white mb-1">
+                  Waiting for M-Pesa confirmation...
+                </p>
+                <p className="text-sm text-subtext dark:text-gray-400">
+                  Check your phone and enter your M-Pesa PIN
+                </p>
+              </div>
+              {collectionRef && (
+                <p className="text-xs text-subtext dark:text-gray-500">
+                  Ref: {collectionRef}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* M-Pesa Result Step - Success */}
+          {isMpesa && mpesaStep === 'result' && isSuccess && (
+            <div className="flex flex-col items-center py-8 space-y-4">
+              <CheckCircle size={56} className="text-green-500" />
+              <div className="text-center">
+                <p className="text-xl font-bold text-dark dark:text-white mb-1">
+                  Payment Successful!
+                </p>
+                <p className="text-lg text-green-600 font-semibold">
+                  {formatCurrency(roundedAmount)}
+                </p>
+                {hasDecimals && (
+                  <p className="text-sm text-subtext dark:text-gray-400 mt-1">
+                    {formatCurrency(formData.amount)} applied + {formatCurrency(excessAmount)} credited to your balance
+                  </p>
+                )}
+              </div>
+              {mpesaStatus?.mpesaReceiptNumber && (
+                <p className="text-sm text-subtext dark:text-gray-400">
+                  Receipt: <span className="font-medium text-dark dark:text-white">{mpesaStatus.mpesaReceiptNumber}</span>
+                </p>
+              )}
+              <button
+                onClick={handleMpesaDone}
+                className="w-full px-4 py-3 bg-primary text-white rounded-full font-bold hover:bg-blue-700 transition mt-4"
+              >
+                Done
+              </button>
+            </div>
+          )}
+
+          {/* M-Pesa Result Step - Failed/Timeout */}
+          {isMpesa && mpesaStep === 'result' && isFailed && (
+            <div className="flex flex-col items-center py-8 space-y-4">
+              <XCircle size={56} className="text-red-500" />
+              <div className="text-center">
+                <p className="text-xl font-bold text-dark dark:text-white mb-1">
+                  Payment Failed
+                </p>
+                <p className="text-sm text-subtext dark:text-gray-400">
+                  {mpesaError || mpesaStatus?.statusDescription || 'The payment could not be completed.'}
+                </p>
+              </div>
+              <button
+                onClick={handleMpesaTryAgain}
+                className="w-full px-4 py-3 bg-green-600 text-white rounded-full font-bold hover:bg-green-700 transition mt-4"
+              >
+                Try Again
+              </button>
+            </div>
+          )}
+
+          {/* Form - shown for M-Pesa input step or non-M-Pesa methods */}
+          {(!isMpesa || mpesaStep === 'input') && (
+            <form onSubmit={!isMpesa ? handleSubmit : (e) => e.preventDefault()} className="space-y-5">
+              <div>
+                <label className="block text-sm font-medium text-subtext dark:text-gray-400 mb-2">Payment Amount</label>
+                <div className="relative">
+                  <span className="absolute left-4 top-3.5 text-dark dark:text-gray-400 font-semibold text-xs">KES</span>
+                  <input
+                    type="number"
+                    required
+                    min="0.01"
+                    max={loan.outstandingBalance}
+                    step="0.01"
+                    value={formData.amount}
+                    onChange={(e) => setFormData({...formData, amount: Number(e.target.value)})}
+                    className="w-full pl-12 pr-4 py-3 bg-bgLight dark:bg-gray-900 rounded-xl border border-transparent dark:border-gray-700 focus:border-primary outline-none text-dark dark:text-white font-medium"
+                  />
+                </div>
+                {hasDecimals && (
+                  <div className="mt-2 p-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                    <p className="text-sm text-amber-700 dark:text-amber-400">
+                      Amount will be rounded up to <span className="font-semibold">{formatCurrency(roundedAmount)}</span>.
+                      The excess of <span className="font-semibold">{formatCurrency(excessAmount)}</span> will be credited to your balance.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-subtext dark:text-gray-400 mb-2">Payment Method</label>
+                <select
+                  value={formData.paymentMethod}
+                  onChange={(e) => setFormData({...formData, paymentMethod: e.target.value})}
+                  className="w-full px-4 py-3 bg-bgLight dark:bg-gray-900 rounded-xl border border-transparent dark:border-gray-700 focus:border-primary outline-none text-dark dark:text-white font-medium"
+                >
+                  <option value="MPESA">M-Pesa</option>
+                  <option value="BANK_TRANSFER">Bank Transfer</option>
+                  <option value="CASH">Cash</option>
+                </select>
+              </div>
+
+              {/* M-Pesa: Phone number + rounding info + STK Push button */}
+              {isMpesa && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-subtext dark:text-gray-400 mb-2">Phone Number</label>
+                    <input
+                      type="tel"
+                      value={phoneNumber}
+                      onChange={(e) => { setPhoneNumber(e.target.value); setError(null); }}
+                      placeholder="0712345678"
+                      className="w-full px-4 py-3 bg-bgLight dark:bg-gray-900 rounded-xl border border-transparent dark:border-gray-700 focus:border-primary outline-none text-dark dark:text-white font-medium"
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleMpesaInitiate}
+                    disabled={loading}
+                    className="w-full px-4 py-3 bg-green-600 text-white rounded-full font-bold hover:bg-green-700 transition flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                  >
+                    {loading ? (
+                      <>
+                        <Loader2 size={20} className="animate-spin" />
+                        Initiating...
+                      </>
+                    ) : (
+                      <>
+                        <Smartphone size={20} />
+                        Pay via M-Pesa
+                      </>
+                    )}
+                  </button>
+
+                  <p className="text-xs text-subtext dark:text-gray-500 text-center">
+                    An STK push will be sent to your phone. Enter your M-Pesa PIN to complete payment.
+                  </p>
+                </>
+              )}
+
+              {/* Non-M-Pesa: Reference number + Make Payment button */}
+              {!isMpesa && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-subtext dark:text-gray-400 mb-2">Reference Number</label>
+                    <input
+                      type="text"
+                      value={formData.referenceNumber}
+                      onChange={(e) => setFormData({...formData, referenceNumber: e.target.value})}
+                      placeholder="e.g., transaction reference code"
+                      className="w-full px-4 py-3 bg-bgLight dark:bg-gray-900 rounded-xl border border-transparent dark:border-gray-700 focus:border-primary outline-none text-dark dark:text-white font-medium"
+                    />
+                  </div>
+
+                  <div className="pt-2 flex gap-3">
+                    <button
+                      type="button"
+                      onClick={handleClose}
+                      className="flex-1 py-3 text-subtext font-medium bg-gray-50 dark:bg-gray-700 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-600"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="flex-1 bg-green-600 text-white py-3 rounded-xl font-bold hover:bg-green-700 transition flex justify-center items-center gap-2 disabled:opacity-70"
+                    >
+                      {loading && <Loader2 className="animate-spin" size={20} />}
+                      {loading ? 'Processing...' : 'Make Payment'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </form>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --- Disbursement Channel Modal ---
+interface DisbursementModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  loan: Loan | null;
+  onSubmit: (data: { loanId: string; disbursementChannel: string; phoneNumber?: string; bankAccount?: string; bankCode?: string }) => Promise<void>;
+}
+
+const DisbursementModal: React.FC<DisbursementModalProps> = ({ isOpen, onClose, loan, onSubmit }) => {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [channel, setChannel] = useState<'MPESA' | 'BANK'>('MPESA');
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [bankAccount, setBankAccount] = useState('');
+  const [bankCode, setBankCode] = useState('');
+
+  useEffect(() => {
+    if (isOpen) {
+      setChannel('MPESA');
+      setPhoneNumber('');
+      setBankAccount('');
+      setBankCode('');
+      setError(null);
+    }
+  }, [isOpen]);
+
+  if (!isOpen || !loan) return null;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+
+    try {
+      await onSubmit({
+        loanId: loan.id,
+        disbursementChannel: channel,
+        ...(phoneNumber && { phoneNumber }),
+        ...(channel === 'BANK' && bankAccount && { bankAccount }),
+        ...(channel === 'BANK' && bankCode && { bankCode }),
+      });
+      onClose();
+    } catch (err: any) {
+      setError(err.message || 'Failed to disburse loan');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const { formatCurrency } = useAppData();
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm">
+      <div className="bg-white dark:bg-gray-800 rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200 flex flex-col max-h-[90vh] transition-colors">
+        <div className="px-6 py-4 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-700 shrink-0">
+          <h3 className="text-xl font-bold text-dark dark:text-white">Disburse Loan</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-full">
+            <X size={24} />
+          </button>
+        </div>
+
+        <div className="overflow-y-auto p-6">
+          <div className="mb-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl">
+            <p className="text-sm text-subtext dark:text-gray-400">Loan: <span className="font-semibold text-dark dark:text-white">{loan.loanNumber}</span></p>
+            <p className="text-sm text-subtext dark:text-gray-400">Member: <span className="font-semibold text-dark dark:text-white">{loan.memberName}</span></p>
+            <p className="text-sm text-subtext dark:text-gray-400">Amount: <span className="font-semibold text-dark dark:text-white">{formatCurrency(loan.principalAmount)}</span></p>
+          </div>
+
+          {error && (
+            <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 rounded-xl text-sm flex items-center gap-2">
+              <AlertCircle size={18} />
+              {error}
+            </div>
+          )}
+
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label className="block text-sm font-medium text-subtext dark:text-gray-400 mb-2">Payment Amount</label>
-              <div className="relative">
-                <span className="absolute left-4 top-3.5 text-dark dark:text-gray-400 font-semibold text-xs">KES</span>
-                <input 
-                  type="number" 
-                  required
-                  min="1"
-                  max={loan.outstandingBalance}
-                  value={formData.amount}
-                  onChange={(e) => setFormData({...formData, amount: Number(e.target.value)})}
-                  className="w-full pl-12 pr-4 py-3 bg-bgLight dark:bg-gray-900 rounded-xl border border-transparent dark:border-gray-700 focus:border-primary outline-none text-dark dark:text-white font-medium" 
-                />
+              <label className="block text-sm font-medium text-subtext dark:text-gray-400 mb-2">Disbursement Channel</label>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setChannel('MPESA')}
+                  className={`flex-1 py-3 rounded-xl font-medium text-sm transition border ${
+                    channel === 'MPESA'
+                      ? 'bg-green-50 dark:bg-green-900/20 border-green-500 text-green-700 dark:text-green-400'
+                      : 'bg-bgLight dark:bg-gray-700 border-transparent text-subtext dark:text-gray-400 hover:border-gray-300'
+                  }`}
+                >
+                  M-Pesa
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChannel('BANK')}
+                  className={`flex-1 py-3 rounded-xl font-medium text-sm transition border ${
+                    channel === 'BANK'
+                      ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-500 text-blue-700 dark:text-blue-400'
+                      : 'bg-bgLight dark:bg-gray-700 border-transparent text-subtext dark:text-gray-400 hover:border-gray-300'
+                  }`}
+                >
+                  Bank Transfer
+                </button>
               </div>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-subtext dark:text-gray-400 mb-2">Payment Method</label>
-              <select 
-                value={formData.paymentMethod}
-                onChange={(e) => setFormData({...formData, paymentMethod: e.target.value})}
-                className="w-full px-4 py-3 bg-bgLight dark:bg-gray-900 rounded-xl border border-transparent dark:border-gray-700 focus:border-primary outline-none text-dark dark:text-white font-medium"
-              >
-                <option value="MPESA">M-Pesa</option>
-                <option value="BANK_TRANSFER">Bank Transfer</option>
-                <option value="CASH">Cash</option>
-              </select>
-            </div>
+            {channel === 'MPESA' && (
+              <div>
+                <label className="block text-sm font-medium text-subtext dark:text-gray-400 mb-2">Phone Number (optional override)</label>
+                <input
+                  type="text"
+                  value={phoneNumber}
+                  onChange={(e) => setPhoneNumber(e.target.value)}
+                  placeholder="Uses member's phone if empty"
+                  className="w-full px-4 py-3 bg-bgLight dark:bg-gray-900 rounded-xl border border-transparent dark:border-gray-700 focus:border-primary outline-none text-dark dark:text-white font-medium transition"
+                />
+              </div>
+            )}
 
-            <div>
-              <label className="block text-sm font-medium text-subtext dark:text-gray-400 mb-2">Reference Number</label>
-              <input 
-                type="text"
-                value={formData.referenceNumber}
-                onChange={(e) => setFormData({...formData, referenceNumber: e.target.value})}
-                placeholder="e.g., MPESA transaction code"
-                className="w-full px-4 py-3 bg-bgLight dark:bg-gray-900 rounded-xl border border-transparent dark:border-gray-700 focus:border-primary outline-none text-dark dark:text-white font-medium" 
-              />
-            </div>
+            {channel === 'BANK' && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-subtext dark:text-gray-400 mb-2">Bank Account Number</label>
+                  <input
+                    type="text"
+                    value={bankAccount}
+                    onChange={(e) => setBankAccount(e.target.value)}
+                    placeholder="Uses member's bank account if empty"
+                    className="w-full px-4 py-3 bg-bgLight dark:bg-gray-900 rounded-xl border border-transparent dark:border-gray-700 focus:border-primary outline-none text-dark dark:text-white font-medium transition"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-subtext dark:text-gray-400 mb-2">Bank Code</label>
+                  <input
+                    type="text"
+                    value={bankCode}
+                    onChange={(e) => setBankCode(e.target.value)}
+                    placeholder="Uses member's bank code if empty"
+                    className="w-full px-4 py-3 bg-bgLight dark:bg-gray-900 rounded-xl border border-transparent dark:border-gray-700 focus:border-primary outline-none text-dark dark:text-white font-medium transition"
+                  />
+                </div>
+              </>
+            )}
 
             <div className="pt-2 flex gap-3">
-              <button 
-                type="button" 
+              <button
+                type="button"
                 onClick={onClose}
-                className="flex-1 py-3 text-subtext font-medium bg-gray-50 dark:bg-gray-700 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-600"
+                className="flex-1 py-3 text-subtext font-medium hover:text-dark dark:hover:text-white transition bg-gray-50 dark:bg-gray-700 dark:text-gray-400 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-600"
               >
                 Cancel
               </button>
-              <button 
-                type="submit" 
+              <button
+                type="submit"
                 disabled={loading}
-                className="flex-1 bg-green-600 text-white py-3 rounded-xl font-bold hover:bg-green-700 transition flex justify-center items-center gap-2 disabled:opacity-70"
+                className="flex-1 bg-primary text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition flex justify-center items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
               >
                 {loading && <Loader2 className="animate-spin" size={20} />}
-                {loading ? 'Processing...' : 'Make Payment'}
+                {loading ? 'Disbursing...' : 'Disburse Loan'}
               </button>
             </div>
           </form>
         </div>
       </div>
     </div>
+  );
+};
+
+// --- Disbursement Status Badge ---
+const DisbursementStatusBadge: React.FC<{ status: string | null | undefined }> = ({ status }) => {
+  if (!status) return null;
+  const config: Record<string, { bg: string; text: string }> = {
+    PENDING: { bg: 'bg-yellow-100', text: 'text-yellow-600' },
+    PROCESSING: { bg: 'bg-blue-100', text: 'text-blue-600' },
+    COMPLETED: { bg: 'bg-green-100', text: 'text-green-600' },
+    FAILED: { bg: 'bg-red-100', text: 'text-red-600' },
+  };
+  const { bg, text } = config[status] || config.PENDING;
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${bg} ${text}`}>
+      {status}
+    </span>
   );
 };
 
@@ -656,9 +1125,11 @@ const StatusBadge: React.FC<{ status: Loan['status'] }> = ({ status }) => {
     APPROVED: { bg: 'bg-green-100', text: 'text-green-600', icon: <CheckCircle size={14} /> },
     DISBURSED: { bg: 'bg-blue-100', text: 'text-blue-600', icon: <Banknote size={14} /> },
     ACTIVE: { bg: 'bg-blue-100', text: 'text-blue-600', icon: <Banknote size={14} /> },
-    REPAID: { bg: 'bg-indigo-100', text: 'text-indigo-600', icon: <CheckCircle size={14} /> },
+    PAID_OFF: { bg: 'bg-indigo-100', text: 'text-indigo-600', icon: <CheckCircle size={14} /> },
     REJECTED: { bg: 'bg-red-100', text: 'text-red-600', icon: <XCircle size={14} /> },
     OVERDUE: { bg: 'bg-red-100', text: 'text-red-600', icon: <AlertCircle size={14} /> },
+    DEFAULTED: { bg: 'bg-red-100', text: 'text-red-600', icon: <AlertCircle size={14} /> },
+    WRITTEN_OFF: { bg: 'bg-gray-100', text: 'text-gray-600', icon: <XCircle size={14} /> },
   };
   
   const { bg, text, icon } = config[status] || config.PENDING;
@@ -692,6 +1163,7 @@ const Loans: React.FC = () => {
   const [isApplicationModalOpen, setIsApplicationModalOpen] = useState(false);
   const [isRepaymentModalOpen, setIsRepaymentModalOpen] = useState(false);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [isDisbursementModalOpen, setIsDisbursementModalOpen] = useState(false);
   const [selectedLoan, setSelectedLoan] = useState<Loan | null>(null);
   const [selectedLoanId, setSelectedLoanId] = useState<string | null>(null);
   const [modalDefaults, setModalDefaults] = useState({ amount: 5000, duration: 12 });
@@ -761,7 +1233,7 @@ const Loans: React.FC = () => {
       if (loanCategory === 'Active') {
         return ['PENDING', 'APPROVED', 'DISBURSED', 'ACTIVE', 'OVERDUE'].includes(loan.status);
       }
-      return ['REPAID', 'REJECTED'].includes(loan.status);
+      return ['PAID_OFF', 'REJECTED', 'DEFAULTED', 'WRITTEN_OFF'].includes(loan.status);
     });
   }, [loans, loanCategory]);
 
@@ -811,6 +1283,28 @@ const Loans: React.FC = () => {
     }
   };
 
+  const handleOpenDisbursementModal = (loan: Loan) => {
+    setSelectedLoan(loan);
+    setIsDisbursementModalOpen(true);
+  };
+
+  const handleDisburse = async (data: { loanId: string; disbursementChannel: string; phoneNumber?: string; bankAccount?: string; bankCode?: string }) => {
+    const response = await api.post<Loan>(`/loans/${data.loanId}/disburse`, {
+      loanId: data.loanId,
+      disbursementChannel: data.disbursementChannel,
+      phoneNumber: data.phoneNumber,
+      bankAccount: data.bankAccount,
+      bankCode: data.bankCode,
+    });
+
+    if (response.success) {
+      await fetchLoans();
+      await fetchLoanStats();
+    } else {
+      throw new Error(response.message || 'Failed to disburse loan');
+    }
+  };
+
   const handleViewDetails = (loan: Loan) => {
     setSelectedLoanId(loan.id);
     setIsDetailModalOpen(true);
@@ -840,12 +1334,21 @@ const Loans: React.FC = () => {
         onClose={() => setIsRepaymentModalOpen(false)}
         loan={selectedLoan}
         onSubmit={handleRepayment}
+        defaultPhone={user?.member?.phoneNumber || ''}
+        onPaymentComplete={() => { fetchLoans(); fetchLoanStats(); }}
       />
       
       <LoanDetailModal
         isOpen={isDetailModalOpen}
         onClose={() => setIsDetailModalOpen(false)}
         loanId={selectedLoanId}
+      />
+
+      <DisbursementModal
+        isOpen={isDisbursementModalOpen}
+        onClose={() => setIsDisbursementModalOpen(false)}
+        loan={selectedLoan}
+        onSubmit={handleDisburse}
       />
 
       {/* Summary Cards */}
@@ -990,13 +1493,25 @@ const Loans: React.FC = () => {
                         </td>
                         <td className="p-4 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                           {['DISBURSED', 'ACTIVE', 'OVERDUE'].includes(loan.status) ? (
-                            <button 
-                              onClick={() => handleOpenRepaymentModal(loan)}
-                              className="px-4 py-2 border border-primary text-primary rounded-full text-sm hover:bg-primary hover:text-white transition"
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => handleOpenRepaymentModal(loan)}
+                                className="px-4 py-2 border border-primary text-primary rounded-full text-sm hover:bg-primary hover:text-white transition"
+                              >
+                                Repay
+                              </button>
+                              {loan.disbursementStatus && (
+                                <DisbursementStatusBadge status={loan.disbursementStatus} />
+                              )}
+                            </div>
+                          ) : loan.status === 'APPROVED' && isAdminOrTreasurer ? (
+                            <button
+                              onClick={() => handleOpenDisbursementModal(loan)}
+                              className="px-4 py-2 bg-primary text-white rounded-full text-sm hover:bg-blue-700 transition"
                             >
-                              Repay
+                              Disburse
                             </button>
-                          ) : loan.status === 'REPAID' || loan.status === 'REJECTED' ? (
+                          ) : loan.status === 'PAID_OFF' || loan.status === 'REJECTED' || loan.status === 'DEFAULTED' || loan.status === 'WRITTEN_OFF' ? (
                             <span className="text-sm text-subtext dark:text-gray-500 italic">Closed</span>
                           ) : (
                             <span className="text-sm text-subtext dark:text-gray-500 italic">Awaiting approval</span>

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Users, Mail, Phone, Calendar, ShieldCheck, Plus, X, Loader2,
   AlertCircle, Edit2, Eye, Search, Filter, UserCheck, UserX,
-  UserMinus, Banknote, CreditCard, ChevronDown
+  UserMinus, Banknote, CreditCard, ChevronDown, Send
 } from 'lucide-react';
 import StatCard from '../components/StatCard';
 import { useAuth } from '../contexts/AuthContext';
@@ -754,6 +754,26 @@ const Members: React.FC = () => {
     setIsModalOpen(true);
   };
 
+  const [resendingId, setResendingId] = useState<string | null>(null);
+
+  const handleResendInvitation = async (member: Member) => {
+    if (!confirm(`Resend registration invitation to ${member.fullName}?`)) return;
+
+    setResendingId(member.id);
+    try {
+      const response = await api.post<void>(`/members/${member.id}/resend-invitation`);
+      if (response.success) {
+        alert('Invitation resent successfully');
+      } else {
+        alert(response.message || 'Failed to resend invitation');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to resend invitation');
+    } finally {
+      setResendingId(null);
+    }
+  };
+
   // Pagination
   const goToPage = (page: number) => {
     if (page >= 0 && page < totalPages) {
@@ -981,6 +1001,16 @@ const Members: React.FC = () => {
                           >
                             <Edit2 size={16} />
                           </button>
+                          {user?.role === 'ADMIN' && (
+                            <button
+                              onClick={() => handleResendInvitation(member)}
+                              disabled={resendingId === member.id}
+                              className="p-2 text-subtext hover:text-green-600 hover:bg-green-50 dark:hover:bg-gray-600 rounded-lg transition disabled:opacity-50"
+                              title="Resend Invitation"
+                            >
+                              {resendingId === member.id ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

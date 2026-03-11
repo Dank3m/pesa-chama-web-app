@@ -1,5 +1,5 @@
-import React, { useMemo } from 'react';
-import { Wallet, CreditCard, TrendingUp, Users, ArrowDownCircle, ArrowUpCircle, Loader2 } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { Wallet, CreditCard, TrendingUp, Users, ArrowDownCircle, ArrowUpCircle, Loader2, X, ChevronRight } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import StatCard from '../components/StatCard';
 import { useAuth } from '../contexts/AuthContext';
@@ -21,13 +21,18 @@ const Dashboard: React.FC<DashboardProps> = ({ isDark }) => {
   
   const { data: currentCycle } = useCurrentCycle(currentGroup?.id);
   const { data: cycleSummary } = useCycleSummary(currentCycle?.id);
+  const [showBalanceModal, setShowBalanceModal] = useState(false);
 
   // Stats from API
   const stats = useMemo(() => {
     if (!dashboard) {
       return {
         totalBalance: 0,
+        openingBalance: 0,
         totalContributions: 0,
+        totalRepayments: 0,
+        totalDisbursements: 0,
+        totalExpenses: 0,
         activeLoans: 0,
         memberCount: 0,
         collectionRate: 0,
@@ -35,7 +40,11 @@ const Dashboard: React.FC<DashboardProps> = ({ isDark }) => {
     }
     return {
       totalBalance: dashboard.totalBalance || 0,
+      openingBalance: dashboard.openingBalance || 0,
       totalContributions: dashboard.totalContributions || 0,
+      totalRepayments: dashboard.totalRepayments || 0,
+      totalDisbursements: dashboard.totalDisbursements || 0,
+      totalExpenses: dashboard.totalExpenses || 0,
       activeLoans: dashboard.activeLoans || 0,
       memberCount: dashboard.memberCount || 0,
       collectionRate: dashboard.collectionRate || 0,
@@ -58,13 +67,12 @@ const Dashboard: React.FC<DashboardProps> = ({ isDark }) => {
   const fundAllocation = useMemo(() => {
     if (!dashboard?.fundAllocation?.length) {
       return [
-        { name: 'Loans Disbursed', value: 40, fill: '#2D60FF' },
-        { name: 'Interest Earned', value: 30, fill: '#16DBCC' },
+        { name: 'Outstanding Loans', value: 40, fill: '#2D60FF' },
+        { name: 'Cash Available', value: 30, fill: '#16DBCC' },
         { name: 'Expenses', value: 15, fill: '#FFBB38' },
-        { name: 'Available', value: 15, fill: '#FF82AC' },
       ];
     }
-    return dashboard.fundAllocation;
+    return dashboard.fundAllocation.filter((item: any) => item.value > 0);
   }, [dashboard]);
 
   // Recent transactions from API
@@ -104,10 +112,17 @@ const Dashboard: React.FC<DashboardProps> = ({ isDark }) => {
               {currentGroup?.name || 'Your Chama'} • {currentFinancialYear?.yearName || 'Financial Year'}
             </p>
           </div>
-          <div className="bg-primary rounded-2xl px-6 py-3">
-            <p className="text-sm text-blue-100">Total Balance</p>
-            <p className="text-3xl font-bold text-white">{formatCurrency(stats.totalBalance)}</p>
-          </div>
+          <button
+            onClick={() => setShowBalanceModal(true)}
+            className="bg-primary rounded-2xl px-6 py-3 text-left hover:bg-blue-700 transition-colors cursor-pointer group"
+          >
+            <p className="text-sm text-blue-100">Cash Balance</p>
+            <div className="flex items-center gap-2">
+              <p className="text-3xl font-bold text-white">{formatCurrency(stats.totalBalance)}</p>
+              <ChevronRight size={20} className="text-blue-200 group-hover:translate-x-0.5 transition-transform" />
+            </div>
+            <p className="text-xs text-blue-200 mt-1">Click for breakdown</p>
+          </button>
         </div>
       </div>
 
@@ -312,6 +327,63 @@ const Dashboard: React.FC<DashboardProps> = ({ isDark }) => {
           )}
         </div>
       </div>
+
+      {/* Balance Breakdown Modal */}
+      {showBalanceModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setShowBalanceModal(false)}>
+          <div className="bg-white dark:bg-gray-800 rounded-3xl w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center p-6 border-b border-gray-100 dark:border-gray-700">
+              <h3 className="text-lg font-bold text-dark dark:text-white">Balance Breakdown</h3>
+              <button onClick={() => setShowBalanceModal(false)} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="text-center mb-6">
+                <p className="text-sm text-subtext dark:text-gray-400">Cash Balance</p>
+                <p className="text-4xl font-bold text-primary">{formatCurrency(stats.totalBalance)}</p>
+                <p className="text-xs text-subtext dark:text-gray-500 mt-1">
+                  {currentFinancialYear?.yearName || 'Current Financial Year'}
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                {stats.openingBalance > 0 && (
+                  <div className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-700 rounded-xl">
+                    <span className="text-sm text-subtext dark:text-gray-400">Opening Balance (B/F)</span>
+                    <span className="font-semibold text-dark dark:text-white">{formatCurrency(stats.openingBalance)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between items-center p-3 bg-green-50 dark:bg-green-900/20 rounded-xl">
+                  <span className="text-sm text-green-700 dark:text-green-400">+ Contributions</span>
+                  <span className="font-semibold text-green-700 dark:text-green-400">{formatCurrency(stats.totalContributions)}</span>
+                </div>
+                <div className="flex justify-between items-center p-3 bg-green-50 dark:bg-green-900/20 rounded-xl">
+                  <span className="text-sm text-green-700 dark:text-green-400">+ Loan Repayments</span>
+                  <span className="font-semibold text-green-700 dark:text-green-400">{formatCurrency(stats.totalRepayments)}</span>
+                </div>
+                <div className="flex justify-between items-center p-3 bg-red-50 dark:bg-red-900/20 rounded-xl">
+                  <span className="text-sm text-red-700 dark:text-red-400">- Loans Disbursed</span>
+                  <span className="font-semibold text-red-700 dark:text-red-400">{formatCurrency(stats.totalDisbursements)}</span>
+                </div>
+                {stats.totalExpenses > 0 && (
+                  <div className="flex justify-between items-center p-3 bg-red-50 dark:bg-red-900/20 rounded-xl">
+                    <span className="text-sm text-red-700 dark:text-red-400">- Expenses</span>
+                    <span className="font-semibold text-red-700 dark:text-red-400">{formatCurrency(stats.totalExpenses)}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="border-t border-gray-200 dark:border-gray-600 pt-3 mt-4">
+                <div className="flex justify-between items-center p-3 bg-primary/10 rounded-xl">
+                  <span className="text-sm font-bold text-primary">= Cash Balance</span>
+                  <span className="text-lg font-bold text-primary">{formatCurrency(stats.totalBalance)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

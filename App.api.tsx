@@ -26,6 +26,7 @@ import Expenses from './pages/Expenses';
 import Members from './pages/Members';
 import Disbursements from './pages/Disbursements';
 import ExternalLoans from './pages/ExternalLoans';
+import Investments from './pages/Investments';
 import Register from './pages/Register';
 import PublicRegister from './pages/PublicRegister';
 import GroupSettings from './pages/GroupSettings';
@@ -50,6 +51,7 @@ const AppContent: React.FC = () => {
     // Multi-group support
     availableGroups,
     hasMultipleGroups,
+    selectedGroupId,
     showGroupSelector,
     selectGroup,
     switchGroup,
@@ -194,6 +196,8 @@ const AppContent: React.FC = () => {
       case 'external-loans':
         // All users can access (shows different data based on role)
         return <ExternalLoans />;
+      case 'investments':
+        return <Investments />;
       case 'group-settings':
         // Guard: only admin can access
         if (!isAdmin) {
@@ -221,7 +225,7 @@ const AppContent: React.FC = () => {
       user={user}
       availableGroups={availableGroups}
       hasMultipleGroups={hasMultipleGroups}
-      selectedGroupId={user?.member?.groupId}
+      selectedGroupId={selectedGroupId}
       onSwitchGroup={switchGroup}
     >
       {renderPage()}

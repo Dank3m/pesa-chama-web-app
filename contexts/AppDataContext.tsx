@@ -62,28 +62,37 @@ interface AppDataProviderProps {
 }
 
 export const AppDataProvider: React.FC<AppDataProviderProps> = ({ children }) => {
-  const { user, isAuthenticated } = useAuth();
-  
+  // IMPORTANT: Use selectedGroupId from AuthContext as the primary group identifier
+  // This ensures data is fetched for the correct group when user switches groups
+  const { user, isAuthenticated, selectedGroupId } = useAuth();
+
   // State
   const [currentGroup, setCurrentGroup] = useState<Group | null>(null);
   const [currentFinancialYear, setCurrentFinancialYear] = useState<FinancialYear | null>(null);
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [isDashboardLoading, setIsDashboardLoading] = useState(false);
 
-  // Fetch user's group on auth
+  // Fetch user's group on auth - Use selectedGroupId as primary source
   useEffect(() => {
-    console.log('AppDataContext - Auth state:', { isAuthenticated, user });
-    
-    // Handle different user structures - groupId might be nested
-    const groupId = user?.groupId || user?.member?.groupId || user?.member?.group?.id;
-    
+    console.log('AppDataContext - Auth state:', { isAuthenticated, selectedGroupId, user });
+
+    // CRITICAL: Use selectedGroupId from AuthContext, NOT user.member.groupId
+    // selectedGroupId is updated when user switches groups
+    // user.member.groupId only reflects the JWT token's original group
+    const groupId = selectedGroupId || user?.member?.groupId || user?.member?.group?.id;
+
     if (isAuthenticated && groupId) {
       console.log('Fetching group with ID:', groupId);
+      // Clear old data immediately when switching groups
+      if (currentGroup?.id && currentGroup.id !== groupId) {
+        setDashboard(null);
+        setCurrentFinancialYear(null);
+      }
       fetchGroup(groupId);
     } else if (isAuthenticated && !groupId) {
-      console.warn('User authenticated but no groupId found in user object:', user);
+      console.warn('User authenticated but no groupId found:', { selectedGroupId, user });
     }
-  }, [isAuthenticated, user]);
+  }, [isAuthenticated, selectedGroupId, user?.member?.groupId]);
 
   // Fetch dashboard when group changes
   useEffect(() => {

@@ -75,6 +75,16 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             if (groups && groups.length > 1) {
               setAvailableGroups(groups);
               setHasMultipleGroups(true);
+
+              // Update user's role to match the selected group's role
+              const currentGroupId = savedGroupId || freshUser.member?.groupId;
+              if (currentGroupId) {
+                const currentGroup = groups.find(g => g.groupId === currentGroupId);
+                if (currentGroup?.role) {
+                  const roleForGroup = currentGroup.role as 'ADMIN' | 'TREASURER' | 'SECRETARY' | 'MEMBER';
+                  setUser(prevUser => prevUser ? { ...prevUser, role: roleForGroup } : prevUser);
+                }
+              }
             }
           } catch (groupErr) {
             // Not critical - user might just have one group
@@ -124,14 +134,23 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
         if (savedGroupId && authResponse.availableGroups.some(g => g.groupId === savedGroupId)) {
           // Use previously selected group
+          const savedGroup = authResponse.availableGroups.find(g => g.groupId === savedGroupId);
+          const roleForGroup = savedGroup?.role as 'ADMIN' | 'TREASURER' | 'SECRETARY' | 'MEMBER' | undefined;
           setSelectedGroupId(savedGroupId);
-          setUser(authResponse.user);
+          setUser({
+            ...authResponse.user,
+            role: roleForGroup || authResponse.user.role
+          });
           setPendingAuthResponse(null);
         } else if (defaultGroup) {
           // Use default group
+          const roleForGroup = defaultGroup.role as 'ADMIN' | 'TREASURER' | 'SECRETARY' | 'MEMBER' | undefined;
           setSelectedGroupId(defaultGroup.groupId);
           authService.setSelectedGroup(defaultGroup.groupId);
-          setUser(authResponse.user);
+          setUser({
+            ...authResponse.user,
+            role: roleForGroup || authResponse.user.role
+          });
           setPendingAuthResponse(null);
         } else {
           // Show group selector
@@ -193,11 +212,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       // Switch to the selected group to get updated member info
       const member = await authService.switchGroup(groupId);
 
-      // Update user with the new member info
+      // Find the role for this group from availableGroups
+      const targetGroup = availableGroups.find(g => g.groupId === groupId);
+      const roleForGroup = targetGroup?.role as 'ADMIN' | 'TREASURER' | 'SECRETARY' | 'MEMBER' | undefined;
+
+      // Update user with the new member info AND the role for this group
       if (pendingAuthResponse) {
         setUser({
           ...pendingAuthResponse.user,
-          member: member
+          member: member,
+          // Update role to match the user's role in the selected group
+          role: roleForGroup || pendingAuthResponse.user.role
         });
       }
 
@@ -221,7 +246,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     } finally {
       setIsLoading(false);
     }
-  }, [pendingAuthResponse]);
+  }, [pendingAuthResponse, availableGroups]);
 
   // Switch to a different group (after already logged in)
   const switchGroup = useCallback(async (groupId: string) => {
@@ -229,11 +254,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     try {
       const member = await authService.switchGroup(groupId);
 
-      // Update user with new member info
+      // Find the role for this group from availableGroups
+      const targetGroup = availableGroups.find(g => g.groupId === groupId);
+      const roleForGroup = targetGroup?.role as 'ADMIN' | 'TREASURER' | 'SECRETARY' | 'MEMBER' | undefined;
+
+      // Update user with new member info AND the role for this group
       if (user) {
         setUser({
           ...user,
-          member: member
+          member: member,
+          // Update role to match the user's role in the target group
+          role: roleForGroup || user.role
         });
       }
 
@@ -246,7 +277,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     } finally {
       setIsLoading(false);
     }
-  }, [user]);
+  }, [user, availableGroups]);
 
   // Dismiss group selector without selecting (cancels login)
   const dismissGroupSelector = useCallback(() => {

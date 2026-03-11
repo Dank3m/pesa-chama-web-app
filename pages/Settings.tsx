@@ -35,7 +35,7 @@ const Notification: React.FC<{ type: 'success' | 'error'; message: string; onClo
 };
 
 const Settings: React.FC = () => {
-  const { user, availableGroups, hasMultipleGroups } = useAuth();
+  const { user, availableGroups, hasMultipleGroups, selectedGroupId } = useAuth();
   const [activeTab, setActiveTab] = useState<'edit-profile' | 'preferences' | 'security' | 'group-settings'>('edit-profile');
   const [isSavingDefaultGroup, setIsSavingDefaultGroup] = useState(false);
 
@@ -57,7 +57,11 @@ const Settings: React.FC = () => {
     email: '',
     phoneNumber: '',
     dateOfBirth: '',
-    address: ''
+    address: '',
+    preferredDisbursementChannel: 'MPESA',
+    bankAccountNumber: '',
+    bankCode: '',
+    bankName: ''
   });
 
   // Preferences state
@@ -83,13 +87,14 @@ const Settings: React.FC = () => {
   const [groupSettingsForm, setGroupSettingsForm] = useState<UpdateGroupSettingsRequest>({});
   const [isLoadingGroupSettings, setIsLoadingGroupSettings] = useState(false);
 
-  // Fetch initial data
+  // Fetch initial data - refetch when selectedGroupId changes
   useEffect(() => {
     const fetchData = async () => {
       setIsLoading(true);
       try {
+        // Pass selectedGroupId to get the correct member profile for multi-group users
         const [profileData, prefsData, securityData] = await Promise.all([
-          settingsService.getProfile(),
+          settingsService.getProfile(selectedGroupId || undefined),
           settingsService.getPreferences(),
           settingsService.getSecuritySettings()
         ]);
@@ -101,7 +106,11 @@ const Settings: React.FC = () => {
           email: profileData.email || '',
           phoneNumber: profileData.phoneNumber || '',
           dateOfBirth: profileData.dateOfBirth || '',
-          address: profileData.address || ''
+          address: profileData.address || '',
+          preferredDisbursementChannel: profileData.preferredDisbursementChannel || 'MPESA',
+          bankAccountNumber: profileData.bankAccountNumber || '',
+          bankCode: profileData.bankCode || '',
+          bankName: profileData.bankName || ''
         });
 
         setPreferences(prefsData);
@@ -123,16 +132,17 @@ const Settings: React.FC = () => {
     };
 
     fetchData();
-  }, []);
+  }, [selectedGroupId]);
 
-  // Fetch group settings when tab is selected
+  // Fetch group settings when tab is selected - use selectedGroupId for multi-group support
   useEffect(() => {
     const fetchGroupSettings = async () => {
-      if (activeTab !== 'group-settings' || !user?.member?.groupId) return;
+      const groupId = selectedGroupId || user?.member?.groupId;
+      if (activeTab !== 'group-settings' || !groupId) return;
 
       setIsLoadingGroupSettings(true);
       try {
-        const settings = await groupSettingsService.getSettings(user.member.groupId);
+        const settings = await groupSettingsService.getSettings(groupId);
         setGroupSettings(settings);
         setGroupSettingsForm({
           financialYearStartMonth: settings.financialYearStartMonth,
@@ -164,7 +174,7 @@ const Settings: React.FC = () => {
     };
 
     fetchGroupSettings();
-  }, [activeTab, user?.member?.groupId]);
+  }, [activeTab, selectedGroupId, user?.member?.groupId]);
 
   // Save handlers
   const handleSaveProfile = async () => {
@@ -405,6 +415,55 @@ const Settings: React.FC = () => {
                  value={profile?.groupName || ''}
                  disabled
                  className="w-full p-4 rounded-2xl bg-bgLight dark:bg-gray-700 border border-transparent text-subtext dark:text-gray-400 outline-none cursor-not-allowed"
+               />
+             </div>
+
+             {/* Disbursement Preferences */}
+             <div className="md:col-span-2 mt-2">
+               <h4 className="text-lg font-bold text-dark dark:text-white mb-4 flex items-center gap-2">
+                 <Building2 size={20} />
+                 Disbursement Preferences
+               </h4>
+             </div>
+             <div className="space-y-2">
+               <label className="text-subtext dark:text-gray-400 text-sm">Preferred Channel</label>
+               <select
+                 value={profileForm.preferredDisbursementChannel}
+                 onChange={(e) => setProfileForm(prev => ({ ...prev, preferredDisbursementChannel: e.target.value }))}
+                 className="w-full p-4 rounded-2xl bg-bgLight dark:bg-gray-700 border border-transparent text-dark dark:text-white outline-none focus:border-primary transition-colors"
+               >
+                 <option value="MPESA">M-Pesa</option>
+                 <option value="BANK">Bank Transfer</option>
+               </select>
+             </div>
+             <div className="space-y-2">
+               <label className="text-subtext dark:text-gray-400 text-sm">Bank Name</label>
+               <input
+                 type="text"
+                 value={profileForm.bankName}
+                 onChange={(e) => setProfileForm(prev => ({ ...prev, bankName: e.target.value }))}
+                 placeholder="e.g., KCB, Equity Bank"
+                 className="w-full p-4 rounded-2xl bg-bgLight dark:bg-gray-700 border border-transparent text-dark dark:text-white outline-none focus:border-primary transition-colors"
+               />
+             </div>
+             <div className="space-y-2">
+               <label className="text-subtext dark:text-gray-400 text-sm">Bank Account Number</label>
+               <input
+                 type="text"
+                 value={profileForm.bankAccountNumber}
+                 onChange={(e) => setProfileForm(prev => ({ ...prev, bankAccountNumber: e.target.value }))}
+                 placeholder="Your bank account number"
+                 className="w-full p-4 rounded-2xl bg-bgLight dark:bg-gray-700 border border-transparent text-dark dark:text-white outline-none focus:border-primary transition-colors"
+               />
+             </div>
+             <div className="space-y-2">
+               <label className="text-subtext dark:text-gray-400 text-sm">Bank Code</label>
+               <input
+                 type="text"
+                 value={profileForm.bankCode}
+                 onChange={(e) => setProfileForm(prev => ({ ...prev, bankCode: e.target.value }))}
+                 placeholder="e.g., 01 for KCB"
+                 className="w-full p-4 rounded-2xl bg-bgLight dark:bg-gray-700 border border-transparent text-dark dark:text-white outline-none focus:border-primary transition-colors"
                />
              </div>
 

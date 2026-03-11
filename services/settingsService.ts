@@ -19,6 +19,10 @@ export interface ProfileResponse {
   memberNumber: string;
   groupId: string;
   groupName: string;
+  preferredDisbursementChannel?: string;
+  bankAccountNumber?: string;
+  bankCode?: string;
+  bankName?: string;
 }
 
 export interface UpdateProfileRequest {
@@ -28,6 +32,10 @@ export interface UpdateProfileRequest {
   phoneNumber?: string;
   address?: string;
   dateOfBirth?: string;
+  preferredDisbursementChannel?: string;
+  bankAccountNumber?: string;
+  bankCode?: string;
+  bankName?: string;
 }
 
 export interface UserSettingsResponse {
@@ -70,9 +78,11 @@ class SettingsService {
 
   /**
    * Get current user's profile
+   * @param groupId - Optional group ID for multi-group users to get the correct member profile
    */
-  async getProfile(): Promise<ProfileResponse> {
-    const response = await api.get<ProfileResponse>(`${this.basePath}/profile`);
+  async getProfile(groupId?: string): Promise<ProfileResponse> {
+    const params = groupId ? { groupId } : undefined;
+    const response = await api.get<ProfileResponse>(`${this.basePath}/profile`, params);
     return response.data;
   }
 

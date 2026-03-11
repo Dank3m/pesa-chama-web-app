@@ -108,7 +108,7 @@ const Landing: React.FC<LandingProps> = ({ onGetStarted, onLogin, isDark, toggle
       </nav>
 
       {/* Hero Section - Increased spacing for tablet view (md:pt-32) while keeping mobile (pt-16) and desktop (lg:pt-24) balanced */}
-      <section className="pt-16 md:pt-32 lg:pt-24 pb-20 lg:pb-32 px-4 relative z-10">
+      <section className="pt-24 md:pt-32 lg:pt-24 pb-20 lg:pb-32 px-4 relative z-10">
         <div className="max-w-7xl mx-auto grid lg:grid-cols-2 gap-12 items-center">
           
           {/* Text Content */}
@@ -355,50 +355,50 @@ const Landing: React.FC<LandingProps> = ({ onGetStarted, onLogin, isDark, toggle
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-5xl mx-auto">
             {/* Starter Tier */}
-            <PricingCard 
+            <PricingCard
               title="Starter"
               price="Free"
               description="Perfect for small family groups just getting started."
               features={[
-                "Up to 5 Members",
+                "Up to 10 Members",
                 "Basic Contribution Tracking",
-                "Manual Reports",
+                "Basic Reports",
                 "Email Support"
               ]}
               buttonText="Start Free"
               onClick={onGetStarted}
             />
 
-            {/* Growth Tier */}
-            <PricingCard 
-              title="Growth"
-              price="KES 500"
+            {/* Standard Tier */}
+            <PricingCard
+              title="Standard"
+              price="KES 1,000"
               period="/ month"
               description="Ideal for active chamas looking to automate operations."
               isPopular
               features={[
-                "Up to 20 Members",
-                "Automated Loan Calculator",
+                "Up to 30 Members",
+                "Loan Management",
                 "SMS Notifications",
-                "PDF Reports Export",
+                "Basic Reports",
                 "Priority Support"
               ]}
-              buttonText="Get Growth"
+              buttonText="Get Standard"
               onClick={onGetStarted}
             />
 
-            {/* Scale Tier */}
-            <PricingCard 
-              title="Scale"
-              price="KES 1,500"
+            {/* Premium Tier */}
+            <PricingCard
+              title="Premium"
+              price="KES 10,000"
               period="/ month"
               description="For large investment groups and cooperatives."
               features={[
                 "Unlimited Members",
-                "Multiple Admin Accounts",
-                "Investment Portfolio Tracking",
+                "External Loans",
                 "API Access",
-                "Dedicated Account Manager"
+                "Priority Support",
+                "All Standard Features"
               ]}
               buttonText="Contact Sales"
               onClick={onGetStarted}

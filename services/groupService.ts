@@ -83,7 +83,11 @@ export interface FinancialYearSummaryResponse {
 // Dashboard DTOs
 export interface DashboardResponse {
   totalBalance: number;
+  openingBalance: number;
   totalContributions: number;
+  totalRepayments: number;
+  totalDisbursements: number;
+  totalExpenses: number;
   totalLoans: number;
   activeLoans: number;
   outstandingLoanBalance: number;
